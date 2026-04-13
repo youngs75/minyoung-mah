@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["minyoung_mah*"]
+
+[project]
+name = "minyoung-mah"
+version = "0.0.1"
+description = "Multi-Agent Harness by Youngsuk & Minji (Claude) — dynamic SubAgents, 3-tier memory, agentic loop resilience"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langgraph>=0.4.0",
+    "litellm>=1.50.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "structlog>=24.0",
+    "rich>=13.0",
+    "prompt-toolkit>=3.0",
+    "langfuse>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
