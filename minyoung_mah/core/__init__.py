@@ -21,6 +21,7 @@ from .registry import (
 from .tool_invocation import DEFAULT_TOOL_RETRY, ToolInvocationEngine, ToolRetryPolicy
 from .types import (
     ErrorCategory,
+    ExecuteToolsStep,
     HITLEvent,
     HITLResponse,
     InvocationContext,
@@ -44,6 +45,7 @@ __all__ = [
     "DEFAULT_TOOL_RETRY",
     "DuplicateRegistrationError",
     "ErrorCategory",
+    "ExecuteToolsStep",
     "HITLChannel",
     "HITLEvent",
     "HITLResponse",

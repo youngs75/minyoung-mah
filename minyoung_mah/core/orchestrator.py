@@ -42,6 +42,7 @@ from .protocols import (
 from .registry import RoleRegistry, ToolRegistry
 from .tool_invocation import ToolInvocationEngine
 from .types import (
+    ExecuteToolsStep,
     InvocationContext,
     LoopResult,
     ObserverEvent,
@@ -263,6 +264,17 @@ class Orchestrator:
 
     async def _run_step(
         self,
+        step: PipelineStep | ExecuteToolsStep,
+        state: PipelineState,
+        user_request: str,
+        run_id: str,
+    ) -> PipelineStepResult:
+        if isinstance(step, ExecuteToolsStep):
+            return await self._run_execute_tools_step(step, state, run_id)
+        return await self._run_role_step(step, state, user_request, run_id)
+
+    async def _run_role_step(
+        self,
         step: PipelineStep,
         state: PipelineState,
         user_request: str,
@@ -310,6 +322,115 @@ class Orchestrator:
         )
         return PipelineStepResult(
             step_name=step.name, role_name=step.role, outputs=list(outputs)
+        )
+
+    async def _run_execute_tools_step(
+        self,
+        step: ExecuteToolsStep,
+        state: PipelineState,
+        run_id: str,
+    ) -> PipelineStepResult:
+        """Run an :class:`ExecuteToolsStep` — LLM-less parallel tool dispatch.
+
+        Calls are grouped by priority (ascending). Each priority group runs
+        in parallel via :meth:`ToolInvocationEngine.call_parallel`; groups
+        run sequentially. Results are collected in the original plan order
+        regardless of execution ordering.
+        """
+        if step.condition is not None and not step.condition(state):
+            await self._emit(
+                "orchestrator.pipeline.step.start",
+                metadata={"step": step.name, "skipped": True, "run_id": run_id},
+            )
+            await self._emit(
+                "orchestrator.pipeline.step.end",
+                ok=True,
+                metadata={"step": step.name, "skipped": True, "run_id": run_id},
+            )
+            return PipelineStepResult(
+                step_name=step.name, role_name=None, outputs=[], skipped=True
+            )
+
+        await self._emit(
+            "orchestrator.pipeline.step.start",
+            metadata={"step": step.name, "run_id": run_id, "kind": "execute_tools"},
+        )
+
+        plan = step.tool_calls_from(state)
+        # Preserve plan order for the final result list.
+        order_by_call_id: dict[str, int] = {
+            req.call_id: idx for idx, (req, _) in enumerate(plan)
+        }
+        results_by_call_id: dict[str, ToolResult] = {}
+
+        # Group by priority (ascending: lower priority number runs first).
+        priorities = sorted({prio for _, prio in plan})
+        step_ok = True
+        for priority in priorities:
+            group = [req for req, prio in plan if prio == priority]
+            pairs: list[tuple[Any, ToolCallRequest]] = []
+            for request in group:
+                try:
+                    adapter = self.tools.get(request.tool_name)
+                    pairs.append((adapter, request))
+                except KeyError:
+                    results_by_call_id[request.call_id] = ToolResult(
+                        ok=False,
+                        value=None,
+                        error=f"tool '{request.tool_name}' not registered",
+                    )
+                    step_ok = False
+
+            if pairs:
+                group_results = await self.tool_engine.call_parallel(pairs)
+                for (_, req), result in zip(pairs, group_results):
+                    results_by_call_id[req.call_id] = result
+                    if not result.ok:
+                        step_ok = False
+
+            if not step_ok and not step.continue_on_failure:
+                break
+
+        ordered_results = [
+            results_by_call_id[req.call_id]
+            for req, _ in plan
+            if req.call_id in results_by_call_id
+        ]
+
+        await self._emit(
+            "orchestrator.pipeline.step.end",
+            ok=step_ok,
+            metadata={
+                "step": step.name,
+                "run_id": run_id,
+                "kind": "execute_tools",
+                "tool_calls": len(plan),
+                "ok_count": sum(1 for r in ordered_results if r.ok),
+            },
+        )
+
+        # For continue_on_failure=True we want the pipeline to treat the
+        # step as "completed" even if some tools failed — responder can
+        # see individual failures via tool_results. For
+        # continue_on_failure=False we synthesize a FAILED RoleInvocation
+        # so the main abort/continue loop in run_pipeline picks it up.
+        outputs: list[RoleInvocationResult] = []
+        if not step_ok and not step.continue_on_failure:
+            outputs = [
+                RoleInvocationResult(
+                    role_name="__execute_tools__",
+                    status=RoleStatus.FAILED,
+                    output=None,
+                    tool_results=list(ordered_results),
+                    error="one or more tool calls failed (continue_on_failure=False)",
+                )
+            ]
+
+        return PipelineStepResult(
+            step_name=step.name,
+            role_name=None,
+            outputs=outputs,
+            tool_results=list(ordered_results),
         )
 
     # ------------------------------------------------------------------

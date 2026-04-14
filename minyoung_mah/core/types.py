@@ -133,14 +133,16 @@ PipelineState = dict[str, "PipelineStepResult"]
 class PipelineStepResult:
     """Aggregated result of a single pipeline step.
 
-    For ``fan_out`` steps the ``outputs`` list holds all parallel invocations.
-    For regular steps ``outputs`` has exactly one entry and ``output`` is
-    a shortcut to it.
+    For role-based ``fan_out`` steps the ``outputs`` list holds all parallel
+    role invocations. For :class:`ExecuteToolsStep` the ``outputs`` list is
+    empty and ``tool_results`` holds the N parallel tool results in plan
+    order. Role steps leave ``tool_results`` empty.
     """
 
     step_name: str
-    role_name: str
+    role_name: str | None
     outputs: list[RoleInvocationResult]
+    tool_results: list["ToolResult"] = field(default_factory=list)
     skipped: bool = False
 
     @property
@@ -166,8 +168,43 @@ class PipelineStep:
 
 
 @dataclass
+class ExecuteToolsStep:
+    """A pipeline step that runs tool calls without an LLM.
+
+    Use this when an upstream role has produced an execution plan and the
+    next step is purely mechanical tool dispatch. The step pulls
+    :class:`ToolCallRequest` instances out of the accumulated pipeline
+    state via ``tool_calls_from`` and runs them through the shared
+    :class:`ToolInvocationEngine`.
+
+    Parameters
+    ----------
+    name:
+        Unique step name — becomes the key in ``PipelineState``.
+    tool_calls_from:
+        Callable returning the list of tool calls to run. Each call may
+        include a ``priority`` (1 = required, 2 = supplementary, 3 =
+        optional). Calls with the same priority run in parallel; lower
+        priority groups run first.
+    condition:
+        Optional skip predicate — same shape as :class:`PipelineStep`.
+    continue_on_failure:
+        When True (default), a failed tool call does not abort the step.
+        When False, the step surfaces the first failing priority group as
+        a step failure and subsequent priority groups are skipped.
+    """
+
+    name: str
+    tool_calls_from: Callable[
+        [PipelineState], list[tuple["ToolCallRequest", int]]
+    ]
+    condition: Callable[[PipelineState], bool] | None = None
+    continue_on_failure: bool = True
+
+
+@dataclass
 class StaticPipeline:
-    steps: list[PipelineStep]
+    steps: list[PipelineStep | ExecuteToolsStep]
     on_step_failure: Literal["abort", "continue", "escalate_hitl"] = "abort"
 
 
