@@ -1,250 +1,284 @@
-"""MemoryStore — SQLite + FTS5 backed persistent memory store."""
+"""Default :class:`MemoryStore` implementations.
+
+Two backends ship with the library:
+
+- :class:`SqliteMemoryStore` — opinionated default. SQLite + FTS5 full-text
+  index, ``(tier, scope, key)`` unique constraint. Tier and scope are
+  application-defined strings; the library enforces no semantics on them.
+- :class:`NullMemoryStore` — drops every write. Required for apps that
+  cannot persist memory (e.g. apt-legal's privacy constraint).
+
+The schema was redesigned from the ax coding agent original: ``layer`` →
+``tier``, ``project_id`` → ``scope``. Per decision D1 the old DB format
+is intentionally incompatible — a fresh start is simpler than a migration
+tool for the rare users who had real data in the old schema.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+
 import structlog
 
-from coding_agent.memory.schema import MemoryRecord
+from ..core.types import MemoryEntry
 
 log = structlog.get_logger(__name__)
 
-# ── DDL ──────────────────────────────────────────────────────────────────────
 
 _CREATE_MEMORIES = """\
 CREATE TABLE IF NOT EXISTS memories (
-    id         TEXT PRIMARY KEY,
-    layer      TEXT NOT NULL,
-    category   TEXT NOT NULL,
-    key        TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    source     TEXT DEFAULT '',
-    project_id TEXT,
-    created_at TEXT,
-    updated_at TEXT,
-    UNIQUE(layer, project_id, key)
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tier        TEXT NOT NULL,
+    scope       TEXT NOT NULL DEFAULT '',
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    metadata    TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE(tier, scope, key)
 );
 """
 
+_CREATE_TIER_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_memories_tier_scope ON memories(tier, scope);"
+)
+
 _CREATE_FTS = """\
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-USING fts5(content, category, key, content=memories, content_rowid=rowid);
+USING fts5(value, key, content=memories, content_rowid=id);
 """
 
-# Triggers keep the FTS index in sync with the main table automatically.
 _TRIGGERS = [
     """\
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content, category, key)
-    VALUES (new.rowid, new.content, new.category, new.key);
+    INSERT INTO memories_fts(rowid, value, key)
+    VALUES (new.id, new.value, new.key);
 END;
 """,
     """\
 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, category, key)
-    VALUES ('delete', old.rowid, old.content, old.category, old.key);
+    INSERT INTO memories_fts(memories_fts, rowid, value, key)
+    VALUES ('delete', old.id, old.value, old.key);
 END;
 """,
     """\
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, category, key)
-    VALUES ('delete', old.rowid, old.content, old.category, old.key);
-    INSERT INTO memories_fts(rowid, content, category, key)
-    VALUES (new.rowid, new.content, new.category, new.key);
+    INSERT INTO memories_fts(memories_fts, rowid, value, key)
+    VALUES ('delete', old.id, old.value, old.key);
+    INSERT INTO memories_fts(rowid, value, key)
+    VALUES (new.id, new.value, new.key);
 END;
 """,
 ]
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# SqliteMemoryStore
+# ---------------------------------------------------------------------------
 
 
-def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
-    """Convert a sqlite3.Row into a MemoryRecord."""
-    return MemoryRecord(
-        id=row["id"],
-        layer=row["layer"],
-        category=row["category"],
-        key=row["key"],
-        content=row["content"],
-        source=row["source"] or "",
-        project_id=row["project_id"],
-        created_at=row["created_at"] or "",
-        updated_at=row["updated_at"] or "",
-    )
+class SqliteMemoryStore:
+    """SQLite + FTS5 backed memory store with tier/scope partitioning.
 
-
-class MemoryStore:
-    """Persistent memory store backed by SQLite with FTS5 full-text search.
-
-    Thread-safety: each public method acquires its own connection-level
-    transaction so concurrent calls from different threads are safe with
-    ``check_same_thread=False``.
+    Parameters
+    ----------
+    db_path:
+        Path to the SQLite database file. Parent dirs are created.
+        Use ``":memory:"`` for an ephemeral store (handy in tests).
+    tiers:
+        Optional declared tier names. When set, :meth:`list_tiers` returns
+        this list instead of querying the table. Writes to undeclared tiers
+        are still allowed — the list is informational.
     """
 
-    def __init__(self, db_path: str) -> None:
-        # Ensure the parent directory exists.
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
+    def __init__(self, db_path: str, tiers: list[str] | None = None) -> None:
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._declared_tiers = list(tiers) if tiers else None
+        self._lock = asyncio.Lock()
         self._init_schema()
         log.info("memory_store.initialized", db_path=db_path)
 
-    # ── Schema bootstrap ─────────────────────────────────────────────────
+    # -- schema --------------------------------------------------------
 
     def _init_schema(self) -> None:
         cur = self._conn.cursor()
         cur.execute(_CREATE_MEMORIES)
+        cur.execute(_CREATE_TIER_IDX)
         cur.execute(_CREATE_FTS)
         for trigger_sql in _TRIGGERS:
             cur.execute(trigger_sql)
         self._conn.commit()
 
-    # ── Public API ───────────────────────────────────────────────────────
+    # -- MemoryStore protocol -----------------------------------------
 
-    def upsert(self, record: MemoryRecord) -> None:
-        """Insert or replace a memory record, keeping FTS in sync via triggers."""
-        record.touch()
+    async def write(
+        self,
+        tier: str,
+        key: str,
+        value: str,
+        scope: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        import json
+
+        scope_s = scope or ""
+        now = datetime.utcnow().isoformat()
+        meta_s = json.dumps(metadata or {})
+        async with self._lock:
+            await asyncio.to_thread(
+                self._write_sync, tier, scope_s, key, value, meta_s, now
+            )
+
+    def _write_sync(
+        self,
+        tier: str,
+        scope: str,
+        key: str,
+        value: str,
+        metadata_json: str,
+        now: str,
+    ) -> None:
         try:
             self._conn.execute(
                 """\
-                INSERT INTO memories (id, layer, category, key, content, source,
-                                      project_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(layer, project_id, key) DO UPDATE SET
-                    content    = excluded.content,
-                    category   = excluded.category,
-                    source     = excluded.source,
+                INSERT INTO memories (tier, scope, key, value, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tier, scope, key) DO UPDATE SET
+                    value      = excluded.value,
+                    metadata   = excluded.metadata,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    record.id,
-                    record.layer,
-                    record.category,
-                    record.key,
-                    record.content,
-                    record.source,
-                    record.project_id or "",
-                    record.created_at,
-                    record.updated_at,
-                ),
+                (tier, scope, key, value, metadata_json, now, now),
             )
             self._conn.commit()
-            log.debug("memory_store.upserted", key=record.key, layer=record.layer)
         except sqlite3.Error:
             self._conn.rollback()
-            log.exception("memory_store.upsert_failed", key=record.key)
+            log.exception("memory_store.write_failed", tier=tier, key=key)
             raise
 
-    def search(
+    async def read(
         self,
-        query: str,
-        layer: str | None = None,
-        limit: int = 10,
-    ) -> list[MemoryRecord]:
-        """Full-text search across memories via FTS5.
+        tier: str,
+        key: str,
+        scope: str | None = None,
+    ) -> MemoryEntry | None:
+        scope_s = scope or ""
+        row = await asyncio.to_thread(
+            lambda: self._conn.execute(
+                "SELECT * FROM memories WHERE tier = ? AND scope = ? AND key = ?",
+                (tier, scope_s, key),
+            ).fetchone()
+        )
+        return _row_to_entry(row) if row else None
 
-        If *layer* is provided the results are further filtered to that layer.
-        """
+    async def search(
+        self,
+        tier: str,
+        query: str,
+        scope: str | None = None,
+        limit: int = 5,
+    ) -> list[MemoryEntry]:
         if not query or not query.strip():
             return []
+        safe_query = query.replace('"', '""')
+        sql = """\
+            SELECT m.*
+            FROM memories m
+            JOIN memories_fts f ON m.id = f.rowid
+            WHERE memories_fts MATCH ? AND m.tier = ?
+        """
+        params: list[Any] = [f'"{safe_query}"', tier]
+        if scope is not None:
+            sql += " AND m.scope = ?"
+            params.append(scope)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
 
-        try:
-            # FTS5 match query — escape double-quotes in user input.
-            safe_query = query.replace('"', '""')
-            sql = """\
-                SELECT m.*
-                FROM memories m
-                JOIN memories_fts f ON m.rowid = f.rowid
-                WHERE memories_fts MATCH ?
-            """
-            params: list[object] = [f'"{safe_query}"']
+        rows = await asyncio.to_thread(
+            lambda: self._conn.execute(sql, params).fetchall()
+        )
+        return [_row_to_entry(r) for r in rows]
 
-            if layer:
-                sql += " AND m.layer = ?"
-                params.append(layer)
-
-            sql += " ORDER BY rank LIMIT ?"
-            params.append(limit)
-
-            rows = self._conn.execute(sql, params).fetchall()
-            return [_row_to_record(r) for r in rows]
-        except sqlite3.Error:
-            log.exception("memory_store.search_failed", query=query)
-            return []
-
-    def get_by_layer(
-        self,
-        layer: str,
-        project_id: str | None = None,
-    ) -> list[MemoryRecord]:
-        """Return all records for a given layer, optionally filtered by project."""
-        try:
-            if project_id is not None:
-                rows = self._conn.execute(
-                    "SELECT * FROM memories WHERE layer = ? AND project_id = ? "
-                    "ORDER BY updated_at DESC",
-                    (layer, project_id),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    "SELECT * FROM memories WHERE layer = ? ORDER BY updated_at DESC",
-                    (layer,),
-                ).fetchall()
-            return [_row_to_record(r) for r in rows]
-        except sqlite3.Error:
-            log.exception("memory_store.get_by_layer_failed", layer=layer)
-            return []
-
-    def delete(self, record_id: str) -> bool:
-        """Delete a memory by its id. Returns True if a row was deleted."""
-        try:
-            cur = self._conn.execute("DELETE FROM memories WHERE id = ?", (record_id,))
-            self._conn.commit()
-            deleted = cur.rowcount > 0
-            if deleted:
-                log.debug("memory_store.deleted", record_id=record_id)
-            return deleted
-        except sqlite3.Error:
-            self._conn.rollback()
-            log.exception("memory_store.delete_failed", record_id=record_id)
-            return False
-
-    def list_all(self) -> list[MemoryRecord]:
-        """Return every record in the store."""
-        try:
-            rows = self._conn.execute(
-                "SELECT * FROM memories ORDER BY layer, updated_at DESC"
+    async def list_tiers(self) -> list[str]:
+        if self._declared_tiers is not None:
+            return list(self._declared_tiers)
+        rows = await asyncio.to_thread(
+            lambda: self._conn.execute(
+                "SELECT DISTINCT tier FROM memories ORDER BY tier"
             ).fetchall()
-            return [_row_to_record(r) for r in rows]
-        except sqlite3.Error:
-            log.exception("memory_store.list_all_failed")
-            return []
-
-    def get_existing_keys(self) -> set[str]:
-        """Return the set of all existing keys (used to prevent duplicates)."""
-        try:
-            rows = self._conn.execute("SELECT key FROM memories").fetchall()
-            return {r["key"] for r in rows}
-        except sqlite3.Error:
-            log.exception("memory_store.get_existing_keys_failed")
-            return set()
-
-    def rebuild_fts(self) -> None:
-        """Manually rebuild the FTS index from the main table."""
-        try:
-            self._conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
-            self._conn.commit()
-            log.info("memory_store.fts_rebuilt")
-        except sqlite3.Error:
-            self._conn.rollback()
-            log.exception("memory_store.fts_rebuild_failed")
+        )
+        return [r["tier"] for r in rows]
 
     def close(self) -> None:
-        """Close the underlying SQLite connection."""
         self._conn.close()
-        log.info("memory_store.closed")
+
+
+# ---------------------------------------------------------------------------
+# NullMemoryStore
+# ---------------------------------------------------------------------------
+
+
+class NullMemoryStore:
+    """Drops every write and returns nothing on reads.
+
+    Used when memory persistence is forbidden (privacy, compliance).
+    """
+
+    def __init__(self, tiers: list[str] | None = None) -> None:
+        self._tiers = list(tiers or [])
+
+    async def write(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        return None
+
+    async def read(self, *args: Any, **kwargs: Any) -> MemoryEntry | None:  # noqa: ARG002
+        return None
+
+    async def search(self, *args: Any, **kwargs: Any) -> list[MemoryEntry]:  # noqa: ARG002
+        return []
+
+    async def list_tiers(self) -> list[str]:
+        return list(self._tiers)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _row_to_entry(row: sqlite3.Row) -> MemoryEntry:
+    import json
+
+    metadata: dict[str, Any] = {}
+    raw_meta = row["metadata"]
+    if raw_meta:
+        try:
+            metadata = json.loads(raw_meta)
+        except (ValueError, TypeError):
+            metadata = {"_raw": raw_meta}
+    return MemoryEntry(
+        tier=row["tier"],
+        scope=row["scope"] or None,
+        key=row["key"],
+        value=row["value"],
+        metadata=metadata,
+        created_at=_parse_iso(row["created_at"]),
+        updated_at=_parse_iso(row["updated_at"]),
+    )
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None

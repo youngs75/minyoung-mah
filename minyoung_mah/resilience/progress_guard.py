@@ -1,23 +1,27 @@
 """Progress Guard — 에이전트 루프 진전 감시.
 
 동일 도구 호출의 반복(stall)을 탐지하여 무한 루프를 방지한다.
+
+Library-level semantics: the guard tracks repeated ``(tool_name, args_hash)``
+pairs inside a sliding window. For domain-specific cycle detection (e.g. the
+coding agent's ``TASK-NN`` delegation loop), applications can inject a
+``key_extractor`` callable that returns a stable secondary key per call.
+Returning ``None`` from the extractor skips secondary tracking for that call.
 """
 
 from __future__ import annotations
 
-import re
 from collections import Counter, deque
 from enum import Enum, auto
+from typing import Callable
 
 import structlog
 
-# Match a TASK-NN prefix anywhere in the description so the guard can
-# count "TASK-04: implement", "TASK-04: 검증", "TASK-04 fix" as the
-# same delegation target. Identical to the regex used by task_tool but
-# duplicated here to avoid an import cycle.
-_TASK_ID_PATTERN = re.compile(r"\bTASK-\d{2,}\b", re.IGNORECASE)
-
 logger = structlog.get_logger(__name__)
+
+# Type alias for the injectable secondary-key extractor.
+# ``(tool_name, tool_args) → key | None``
+KeyExtractor = Callable[[str, dict], "str | None"]
 
 
 class GuardVerdict(Enum):
@@ -46,23 +50,37 @@ class ProgressGuard:
         window_size: int = 10,
         stall_threshold: int = 3,
         max_iterations: int = 50,
-        task_window_size: int = 12,
-        task_repeat_threshold: int = 6,
+        secondary_window_size: int = 12,
+        secondary_repeat_threshold: int = 6,
+        key_extractor: KeyExtractor | None = None,
     ) -> None:
         self.window_size = window_size
         self.stall_threshold = stall_threshold
         self.max_iterations = max_iterations
-        self.task_window_size = task_window_size
-        self.task_repeat_threshold = task_repeat_threshold
+        self.secondary_window_size = secondary_window_size
+        self.secondary_repeat_threshold = secondary_repeat_threshold
+        self._key_extractor = key_extractor
 
         self._action_history: deque[tuple[str, int]] = deque(maxlen=window_size)
         self._warn_issued: bool = False
-        # A-2: orchestrator-level repeated TASK-NN delegation tracking.
-        # Indexed by normalised TASK-NN id; verifier↔fixer↔verifier loops
-        # show up here as the same id repeating > task_repeat_threshold
-        # times within the window even though the descriptions differ.
-        self._task_history: deque[str] = deque(maxlen=task_window_size)
-        self._task_warn_issued: bool = False
+        # Secondary-key tracking. Populated only when a key_extractor is
+        # supplied — applications use this to catch domain-specific cycles
+        # (e.g. the coding agent's verifier↔fixer TASK-NN loop).
+        self._secondary_history: deque[str] = deque(maxlen=secondary_window_size)
+        self._secondary_warn_issued: bool = False
+
+    @classmethod
+    def disabled(cls) -> "ProgressGuard":
+        """A guard that never fires — for pipelines where iteration count is
+        bounded by construction (e.g. static pipelines).
+        """
+        return cls(
+            window_size=1,
+            stall_threshold=10_000,
+            max_iterations=10_000,
+            secondary_window_size=1,
+            secondary_repeat_threshold=10_000,
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -86,15 +104,16 @@ class ProgressGuard:
             args_hash=args_hash,
             history_len=len(self._action_history),
         )
-        # A-2: also track repeated delegations to the same TASK-NN id.
-        # Description-based deduping in _safe_hash misses verifier↔fixer
-        # cycles because each iteration writes a slightly different prose.
-        if tool_name == "task" and isinstance(tool_args, dict):
-            desc = tool_args.get("description") or ""
-            if isinstance(desc, str):
-                m = _TASK_ID_PATTERN.search(desc)
-                if m is not None:
-                    self._task_history.append(m.group(0).upper())
+        # Secondary-key tracking via the injected extractor. The extractor
+        # decides what counts as a "same target" (e.g. TASK-NN id, file
+        # path, database table name). Returning None skips tracking.
+        if self._key_extractor is not None and isinstance(tool_args, dict):
+            try:
+                key = self._key_extractor(tool_name, tool_args)
+            except Exception:  # noqa: BLE001
+                key = None
+            if key is not None:
+                self._secondary_history.append(key)
 
     def check(self, iteration: int) -> GuardVerdict:
         """현재 상태를 판정한다.
@@ -118,30 +137,29 @@ class ProgressGuard:
             )
             return GuardVerdict.STOP
 
-        # 2. 동일 TASK-NN delegation 반복 (verifier↔fixer 사이클 차단)
-        if self._task_history:
-            task_counter = Counter(self._task_history)
-            top_task, top_freq = task_counter.most_common(1)[0]
-            if top_freq >= self.task_repeat_threshold:
-                if self._task_warn_issued:
+        # 2. 동일 secondary-key 반복 (domain-specific 사이클 차단)
+        if self._secondary_history:
+            key_counter = Counter(self._secondary_history)
+            top_key, top_freq = key_counter.most_common(1)[0]
+            if top_freq >= self.secondary_repeat_threshold:
+                if self._secondary_warn_issued:
                     logger.error(
-                        "progress_guard.task_repeat_stop",
-                        task_id=top_task,
+                        "progress_guard.secondary_repeat_stop",
+                        key=top_key,
                         frequency=top_freq,
-                        threshold=self.task_repeat_threshold,
+                        threshold=self.secondary_repeat_threshold,
                     )
                     return GuardVerdict.STOP
-                self._task_warn_issued = True
+                self._secondary_warn_issued = True
                 logger.warning(
-                    "progress_guard.task_repeat_warn",
-                    task_id=top_task,
+                    "progress_guard.secondary_repeat_warn",
+                    key=top_key,
                     frequency=top_freq,
-                    threshold=self.task_repeat_threshold,
+                    threshold=self.secondary_repeat_threshold,
                 )
                 return GuardVerdict.WARN
-            # 다른 task가 진행되면 task warn 플래그 리셋
-            if top_freq < self.task_repeat_threshold and self._task_warn_issued:
-                self._task_warn_issued = False
+            if top_freq < self.secondary_repeat_threshold and self._secondary_warn_issued:
+                self._secondary_warn_issued = False
 
         # 3. 정체 탐지 (윈도우 내 동일 행동 빈도)
         if not self._action_history:
@@ -205,8 +223,8 @@ class ProgressGuard:
         """기록과 내부 상태를 초기화한다."""
         self._action_history.clear()
         self._warn_issued = False
-        self._task_history.clear()
-        self._task_warn_issued = False
+        self._secondary_history.clear()
+        self._secondary_warn_issued = False
         logger.debug("progress_guard.reset")
 
 
