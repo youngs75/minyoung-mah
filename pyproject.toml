@@ -13,24 +13,26 @@ description = "Multi-Agent Harness by Youngsuk & Minji (Claude) — dynamic SubA
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "langchain>=0.3.0",
-    "langchain-openai>=0.3.0",
-    "langgraph>=0.4.0",
-    "litellm>=1.50.0",
     "pydantic>=2.0",
-    "pydantic-settings>=2.2",
-    "python-dotenv>=1.0",
     "structlog>=24.0",
-    "rich>=13.0",
-    "prompt-toolkit>=3.0",
-    "langfuse>=2.0",
 ]
+
+[project.optional-dependencies]
+# Optional integrations surface only if the consumer opts in.
+# - langfuse: for the (future) LangfuseObserver adapter
+# - langchain: for consumers who want to pass langchain_core messages through
+#              the orchestrator's role-invocation path
+langfuse = ["langfuse>=2.0"]
+langchain = ["langchain-core>=0.3"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.8.0",
+    # Test fixtures construct AIMessage objects that represent what a real
+    # consumer would pass in. The library itself never imports langchain_core.
+    "langchain-core>=0.3",
 ]
 
 [tool.pytest.ini_options]

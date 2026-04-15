@@ -1,7 +1,47 @@
 # 04. Open Questions — 매핑 과정에서 드러난 결정 대기 항목
 
-**상태**: Draft 1 · 2026-04-13
+**상태**: Draft 1 · 2026-04-13 작성 / 2026-04-15 status banner 추가
 **목적**: 01~03 문서에서 확신이 부족했거나 두 도메인(coding, apt-legal) 사이에서 충돌한 설계 질문을 모은다. 각 질문은 Phase 2a 구현 시작 전에 해결되어야 한다. 내가 답을 어느 정도 가진 것은 **권장안**을 달아두고, 사용자 결정이 필요한 것은 **결정 대기**로 표시한다.
+
+---
+
+## ⚠️ 2026-04-15 상태 공지 (Status Banner)
+
+이 문서는 **Phase 2a 착수 전(2026-04-13)**에 작성됐다. 이후 경계 재정의(2026-04-15)로 `examples/apt_legal_agent/`가 `archive/`로 이동하고 library가 순수 protocol 레이어로 scope-down되면서, 아래 질문의 상당수가 **해결**되거나 **폐기**됐다. 각 주제 앞에 붙은 **[RESOLVED]** / **[OBSOLETE]** / **[OPEN]** 태그를 기준으로 읽는다.
+
+### 빠른 요약 표 (업데이트본)
+
+| ID | 원래 질문 | 현재 상태 | 코멘트 |
+|---|---|---|---|
+| A1 | Delegate tool 주입 | **[DEFERRED → Phase 2c]** | `run_loop`이 아직 `NotImplementedError`. 설계와 함께 재논의. |
+| A2 | SubAgent 인스턴스 생성 | **[DEFERRED → Phase 2c]** | `run_loop` 설계 시 같이 결정. |
+| A3 | Pipeline HITL interrupt | **[RESOLVED]** | `run_pipeline`은 async blocking. `HITLChannel.ask`가 자연스럽게 await된다. Suspension 없음. |
+| A4 | output_schema fast path | **[RESOLVED]** | `Orchestrator.invoke_role`이 `output_schema` + `max_iterations == 1` 조건에서 structured path를 분기. |
+| A5 | ExecuteToolsStep vs delegate | **[RESOLVED]** | 둘 다 별개 개념. `ExecuteToolsStep`은 library에 추가됨. Delegate는 Phase 2c. |
+| A6 | pipeline vs loop 통합 | **[RESOLVED]** | 분리 유지 결정. `run_pipeline`만 active, `run_loop`은 Phase 2c. |
+| B1 | output_schema + tools 혼용 | **[RESOLVED]** | 일단 exclusive. 필요해지면 재검토. |
+| B2 | max_iterations semantics | **[RESOLVED]** | LLM turn 수로 통일. |
+| C1 | ToolResult.value 타입 | **[RESOLVED]** | `str | BaseModel | dict` 3종. |
+| C2 | Retry layer | **[RESOLVED]** | tool-level(transient) + 호출자 판단(semantic). `DEFAULT_TOOL_RETRY`가 library default. |
+| D1 | Memory schema migration | **[RESOLVED]** | 기존 DB 버림. `tier/scope` 스키마로 clean start. |
+| D2 | Memory extractor optional | **[RESOLVED]** | `MemoryExtractor`는 protocol이지만 Orchestrator 생성자가 None 허용. |
+| D3 | Cross-scope search | **[RESOLVED]** | `scope=None` 허용. `SqliteMemoryStore.search`가 구현. |
+| D4 | Extractor의 HITL 권한 | **[OBSOLETE]** | 경계 재정의로 memory extractor 구현체를 library가 제공하지 않음. 소비자 관심사. |
+| E1 | ask blocking vs timeout | **[RESOLVED]** | HITLChannel 구현체 책임으로 확정. |
+| F1 | ErrorCategory coding 가정 | **[RESOLVED]** | 7종 일반화 완료, coding-specific 없음. |
+| F2 | Watchdog timeout 기본값 | **[DEFERRED → Phase 2c]** | `ResiliencePolicy`에 role-level timeout 주입이 아직 없음. 필요해지면 추가. |
+| F3 | ProgressGuard 기본값 | **[RESOLVED]** | opinionated default 제공, injectable `key_extractor`로 override. |
+| G1 | Observer event schema | **[RESOLVED]** | `EVENT_NAMES` 표준 이벤트 집합 확정 (`orchestrator.run.*`, `role.invoke.*`, `tool.call.*` 등). backend adapter 구조. |
+| H1 | shared_state 동시성 | **[RESOLVED]** | read-only + fan_out results list. `ExecuteToolsStep`에서 이 패턴 실증됨. |
+| I1 | apt-legal planner 전술 | **[OBSOLETE]** | apt-legal은 별도 리포. library 범위 아님. |
+| J1 | library vs coding agent 구현 순서 | **[OBSOLETE]** | 경계 재정의로 "coding agent 이식" 자체가 이 리포의 로드맵에서 빠짐. 각 소비자 리포에서 진행. |
+| J2 | apt-legal repo 위치 | **[OBSOLETE]** | 별도 리포로 확정됨. |
+
+**→ 아래 원문은 Phase 2a 진입 전 설계 사고의 기록으로 보존한다. 현재 진실은 위 표와 코드(`minyoung_mah/core/`)다.**
+
+---
+
+
 
 ---
 
@@ -435,3 +475,52 @@ PipelineStep(
    - (c) **run_pipeline + run_loop 모두**: (b) + run_loop. coding agent 이식 가능.
 
 **권장**: **(b)**. 이유: Phase 3가 apt-legal이고 apt-legal은 static pipeline이라 run_loop이 없어도 진행 가능. run_loop은 Phase 4(coding agent 이식) 시작 시 추가. 총 소요 시간 최소화.
+
+---
+
+## Phase 2c — 신규 Open Questions (2026-04-15 추가)
+
+Phase 2b 클린업이 끝난 시점에서 library가 다음에 진행할 수 있는 작업들. 모두 **소비자 리포에서 실제 gap이 관찰될 때 착수**한다. 선제적으로 구현하지 않는다.
+
+### K1. `run_loop` 설계 — dynamic mode의 최소 표면적 [OPEN]
+
+**맥락**: `Orchestrator.run_loop`는 현재 `NotImplementedError`. static pipeline(`run_pipeline`)만으로는 ReAct-style agent(예: Deep Insight의 coordinator, coding agent의 planner)를 표현할 수 없다.
+
+**질문**: `run_loop`의 signature와 종료 조건을 어떻게 정의할 것인가?
+
+**옵션**:
+- **(a)** `run_loop(driver_role, ctx, max_iterations, stop_when)` — driver가 LLM 호출 → tool 호출 루프, `stop_when` 또는 driver가 `final=True`를 내면 종료.
+- **(b)** `run_loop`을 `run_pipeline`의 특수 케이스로 취급 — `LoopStep(driver_role, stop_condition)`을 `PipelineStep`의 한 변종으로 추가, `run_pipeline`만 유지.
+- **(c)** 별도 `AgentLoop` 클래스 — Orchestrator는 단순 `invoke_role` 디스패처로 남기고, loop 로직은 별개 클래스로 분리.
+
+**결정 기준**: 소비자(apt-legal 또는 coding) 중 하나가 실제로 ReAct 루프를 필요로 할 때, 그 요구사항을 먼저 본 뒤 결정.
+
+### K2. `QueueObserver` — streaming을 위한 observer 변종 [OPEN]
+
+**맥락**: Deep Insight는 전역 `deque` + `threading.Lock`으로 tool agent의 이벤트를 main loop에 forward한다 (`05_reference_topologies.md` 1번). FastAPI SSE/WebSocket 통합 시 동일 패턴이 필요할 가능성 높음.
+
+**질문**: `Observer` 프로토콜의 표준 구현으로 `QueueObserver(queue: asyncio.Queue)`를 추가할 것인가?
+
+**권장**: **소비자가 요구할 때 추가**. 현재 `CompositeObserver`와 application-level observer 구현으로 충분히 감당 가능. Deep Insight 스타일 전역 queue는 `CollectingObserver` + custom forwarder로 이미 흉내낼 수 있음.
+
+### K3. `Orchestrator.max_iterations` 하드 스톱 [OPEN]
+
+**맥락**: `ProgressGuard`는 "같은 행동 반복"을 잡고, Deep Insight의 `set_max_node_executions(25)`는 "총 실행 횟수 상한"을 본다. 두 가드가 직교한다.
+
+**질문**: `Orchestrator` 또는 `run_pipeline`/`run_loop`에 "total step/iteration count" 하드 리미트를 명시적으로 추가할 것인가?
+
+**권장**: `run_loop` 설계 시 같이 결정. static pipeline은 step 수가 구조적으로 bounded라 필요 없음. dynamic loop에서만 의미 있는 가드.
+
+### K4. Langfuse observer 실구현 [OPEN]
+
+**맥락**: 현재 `observer/events.py`에 Langfuse adapter가 없다 (grep 결과 0건). `pyproject.toml`의 optional extra(`[langfuse]`)만 선언해둔 상태.
+
+**질문**: 언제 실제 구현을 하는가?
+
+**권장**: 소비자 중 하나가 Langfuse dashboard를 실제로 켜고 트레이스를 보고 싶어할 때. 그 전까지는 `StructlogObserver`로 충분.
+
+### K5. pyproject.toml 의존성 재재검토 [OPEN]
+
+**맥락**: 2026-04-15에 11개 → 2개(pydantic, structlog)로 줄임. 만약 추후 `run_loop` 구현에서 `asyncio` 외에 무언가 더 필요해지면 (예: 상태 직렬화에 `msgpack`, trace id 생성에 `uuid7`) 조심스럽게 추가.
+
+**원칙**: runtime dependency는 **정당화가 필요한 특권**. 새 의존성을 받을 때마다 "이게 optional extra로 가능한가?"를 먼저 묻는다.
