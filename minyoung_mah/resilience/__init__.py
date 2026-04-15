@@ -1,29 +1,24 @@
-"""Agentic Loop 복원력 시스템.
+"""Resilience package — policy + progress guard are the library surface.
 
-타임아웃 감시, 재시도 정책, 진전 감시, 안전 정지, 통합 에러 처리를 제공한다.
+The legacy watchdog / retry_policy / safe_stop / error_handler modules
+are still present as broken copies of the coding-agent originals (they
+import ``coding_agent.*``). Importing this package must NOT pull them
+in — otherwise ``minyoung_mah.core.orchestrator`` can't load, which
+breaks every downstream application.
+
+They'll be rewritten when Phase 4 ports the coding agent into
+``examples/coding_agent/``. Until then, import the working pieces via
+their submodules (``minyoung_mah.resilience.policy``,
+``minyoung_mah.resilience.progress_guard``) rather than from this
+package root.
 """
 
-from coding_agent.resilience.error_handler import ErrorHandler, ErrorResolution
-from coding_agent.resilience.progress_guard import GuardVerdict, ProgressGuard
-from coding_agent.resilience.retry_policy import (
-    ErrorClassifier,
-    FailurePolicy,
-    FailureType,
-    retry_with_backoff,
-)
-from coding_agent.resilience.safe_stop import SafeStop, SafeStopError
-from coding_agent.resilience.watchdog import Watchdog
+from .policy import ResiliencePolicy, default_resilience
+from .progress_guard import GuardVerdict, ProgressGuard
 
 __all__ = [
-    "ErrorClassifier",
-    "ErrorHandler",
-    "ErrorResolution",
-    "FailurePolicy",
-    "FailureType",
     "GuardVerdict",
     "ProgressGuard",
-    "SafeStop",
-    "SafeStopError",
-    "Watchdog",
-    "retry_with_backoff",
+    "ResiliencePolicy",
+    "default_resilience",
 ]
