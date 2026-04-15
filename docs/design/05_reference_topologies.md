@@ -108,8 +108,9 @@ orchestrator = Orchestrator(..., observer=StructlogObserver())
 소비자 리포들이 실제로 돌기 시작하면 이 섹션에 축적한다. 후보:
 
 - **Plan-and-Execute** (LangGraph 튜토리얼 기반)
-- **ReAct loop** (단일 역할, dynamic tool calling — `run_loop` 구현 후 추가)
+- **ReAct loop** (단일 역할, dynamic tool calling — 소비자가 `invoke_role`을 자기 while 루프에서 반복 호출하는 형태. library는 `run_loop`을 제공하지 않습니다.)
 - **Critique-and-Revise** (생성-검증 2단계 루프)
+- **Router + conditional lookups + synthesizer** (apt-legal-agent 4-role pattern — `examples/apt_legal_minimal.py`에 단일 파일 박제. `StaticPipeline.shared_state`, `PipelineStepResult.payload_as`, `RoleInvocationResult.format_for_llm(include_incomplete=True)`를 활용한 synthesizer 환각 가드.)
 
 ---
 

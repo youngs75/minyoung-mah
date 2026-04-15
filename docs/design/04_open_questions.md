@@ -1,24 +1,29 @@
 # 04. Open Questions — 매핑 과정에서 드러난 결정 대기 항목
 
-**상태**: Draft 1 · 2026-04-13 작성 / 2026-04-15 status banner 추가
-**목적**: 01~03 문서에서 확신이 부족했거나 두 도메인(coding, apt-legal) 사이에서 충돌한 설계 질문을 모은다. 각 질문은 Phase 2a 구현 시작 전에 해결되어야 한다. 내가 답을 어느 정도 가진 것은 **권장안**을 달아두고, 사용자 결정이 필요한 것은 **결정 대기**로 표시한다.
+**상태**: Draft 1 · 2026-04-13 작성 / 2026-04-15 status banner 추가 / 2026-04-15 0.1.0 재정렬
+**목적**: 01~03 문서에서 확신이 부족했거나 두 도메인(coding, apt-legal) 사이에서 충돌한 설계 질문을 모은다. 이 문서는 이제 **설계 사고의 타임라인 보존**용이며, 현재의 진실은 아래 표와 코드(`minyoung_mah/core/`)입니다.
 
 ---
 
-## ⚠️ 2026-04-15 상태 공지 (Status Banner)
+## ⚠️ 상태 공지 (Status Banner)
 
-이 문서는 **Phase 2a 착수 전(2026-04-13)**에 작성됐다. 이후 경계 재정의(2026-04-15)로 `examples/apt_legal_agent/`가 `archive/`로 이동하고 library가 순수 protocol 레이어로 scope-down되면서, 아래 질문의 상당수가 **해결**되거나 **폐기**됐다. 각 주제 앞에 붙은 **[RESOLVED]** / **[OBSOLETE]** / **[OPEN]** 태그를 기준으로 읽는다.
+이 문서는 **Phase 2a 착수 전(2026-04-13)**에 작성됐습니다. 이후 두 단계의 변화가 있었습니다:
 
-### 빠른 요약 표 (업데이트본)
+1. **2026-04-15 경계 재정의** — `examples/apt_legal_agent/`가 `archive/`로 이동, library가 순수 protocol 레이어로 scope-down. 많은 질문이 **해결**되거나 **폐기**됨.
+2. **2026-04-15 0.1.0 — apt-legal 실소비자 피드백** — 첫 실소비자(apt-legal-agent)가 시나리오 1~4를 돌려 실측한 gap을 반영. `run_loop` shape를 전면 삭제하고, `shared_state` / `payload_as` / `format_for_llm` 같은 library-ness 헬퍼를 추가. 그 결과 `run_loop` 관련 open question(A1/A2/A6/K1/K3)은 **[REMOVED]** 처리됨.
+
+각 주제 앞에 붙은 **[RESOLVED]** / **[OBSOLETE]** / **[REMOVED]** / **[OPEN]** 태그를 기준으로 읽습니다.
+
+### 빠른 요약 표 (0.1.0 업데이트본)
 
 | ID | 원래 질문 | 현재 상태 | 코멘트 |
 |---|---|---|---|
-| A1 | Delegate tool 주입 | **[DEFERRED → Phase 2c]** | `run_loop`이 아직 `NotImplementedError`. 설계와 함께 재논의. |
-| A2 | SubAgent 인스턴스 생성 | **[DEFERRED → Phase 2c]** | `run_loop` 설계 시 같이 결정. |
+| A1 | Delegate tool 주입 | **[REMOVED]** | `run_loop` 자체가 0.1.0에서 삭제됨. 동적 loop가 필요한 소비자는 `invoke_role` 위에서 자기 delegate 패턴을 직접 조립한다. |
+| A2 | SubAgent 인스턴스 생성 | **[REMOVED]** | A1과 동일 이유. |
 | A3 | Pipeline HITL interrupt | **[RESOLVED]** | `run_pipeline`은 async blocking. `HITLChannel.ask`가 자연스럽게 await된다. Suspension 없음. |
-| A4 | output_schema fast path | **[RESOLVED]** | `Orchestrator.invoke_role`이 `output_schema` + `max_iterations == 1` 조건에서 structured path를 분기. |
-| A5 | ExecuteToolsStep vs delegate | **[RESOLVED]** | 둘 다 별개 개념. `ExecuteToolsStep`은 library에 추가됨. Delegate는 Phase 2c. |
-| A6 | pipeline vs loop 통합 | **[RESOLVED]** | 분리 유지 결정. `run_pipeline`만 active, `run_loop`은 Phase 2c. |
+| A4 | output_schema fast path | **[RESOLVED]** | `Orchestrator.invoke_role`이 `output_schema` + `max_iterations == 1` + `tool_allowlist=[]` 3-조건에서 structured path로 분기. apt-legal `router_role`이 실전 검증. |
+| A5 | ExecuteToolsStep vs delegate | **[RESOLVED]** | `ExecuteToolsStep`은 library에 추가됨. Delegate는 A1 REMOVED와 함께 library 범위 밖. |
+| A6 | pipeline vs loop 통합 | **[REMOVED]** | `run_loop`을 삭제했으므로 통합 여부 자체가 moot. |
 | B1 | output_schema + tools 혼용 | **[RESOLVED]** | 일단 exclusive. 필요해지면 재검토. |
 | B2 | max_iterations semantics | **[RESOLVED]** | LLM turn 수로 통일. |
 | C1 | ToolResult.value 타입 | **[RESOLVED]** | `str | BaseModel | dict` 3종. |
@@ -29,15 +34,17 @@
 | D4 | Extractor의 HITL 권한 | **[OBSOLETE]** | 경계 재정의로 memory extractor 구현체를 library가 제공하지 않음. 소비자 관심사. |
 | E1 | ask blocking vs timeout | **[RESOLVED]** | HITLChannel 구현체 책임으로 확정. |
 | F1 | ErrorCategory coding 가정 | **[RESOLVED]** | 7종 일반화 완료, coding-specific 없음. |
-| F2 | Watchdog timeout 기본값 | **[DEFERRED → Phase 2c]** | `ResiliencePolicy`에 role-level timeout 주입이 아직 없음. 필요해지면 추가. |
+| F2 | Watchdog timeout 기본값 | **[RESOLVED]** | 0.1.0에서 apt-legal 실측 기반으로 `fallback_timeout_s=180`, `role_timeouts` per-role override 지원. |
 | F3 | ProgressGuard 기본값 | **[RESOLVED]** | opinionated default 제공, injectable `key_extractor`로 override. |
 | G1 | Observer event schema | **[RESOLVED]** | `EVENT_NAMES` 표준 이벤트 집합 확정 (`orchestrator.run.*`, `role.invoke.*`, `tool.call.*` 등). backend adapter 구조. |
-| H1 | shared_state 동시성 | **[RESOLVED]** | read-only + fan_out results list. `ExecuteToolsStep`에서 이 패턴 실증됨. |
+| H1 | shared_state 동시성 | **[RESOLVED]** | 0.1.0에서 `StaticPipeline.shared_state`는 pipeline-wide 상수(read-only), 각 step이 override 가능. fan_out은 결과를 list로 수집. |
 | I1 | apt-legal planner 전술 | **[OBSOLETE]** | apt-legal은 별도 리포. library 범위 아님. |
 | J1 | library vs coding agent 구현 순서 | **[OBSOLETE]** | 경계 재정의로 "coding agent 이식" 자체가 이 리포의 로드맵에서 빠짐. 각 소비자 리포에서 진행. |
 | J2 | apt-legal repo 위치 | **[OBSOLETE]** | 별도 리포로 확정됨. |
+| K1 | `run_loop` 설계 | **[REMOVED]** | 0.1.0에서 `run_loop`/`LoopState`/`LoopResult` 전면 삭제. 이유: 첫 실소비자(apt-legal)가 필요로 하지 않았고, 빈 껍데기를 유지하는 비용이 나중에 구현하는 비용보다 컸음. |
+| K3 | `max_iterations` 하드 스톱 | **[DEFERRED]** | static pipeline은 구조상 bounded. 동적 loop를 자기 리포에서 조립하는 소비자가 생기면 재검토. |
 
-**→ 아래 원문은 Phase 2a 진입 전 설계 사고의 기록으로 보존한다. 현재 진실은 위 표와 코드(`minyoung_mah/core/`)다.**
+**→ 아래 원문은 Phase 2a 진입 전 설계 사고의 기록으로 보존한다. 현재 진실은 위 표와 코드(`minyoung_mah/core/`)입니다.**
 
 ---
 

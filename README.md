@@ -52,15 +52,16 @@ pip install -e .
 pytest tests/library/     # 33 tests, 초 단위 완주, 네트워크 없음
 ```
 
-Runtime 의존성은 `pydantic`과 `structlog` 둘뿐입니다. langchain 메시지 호환은 optional extra로 제공됩니다 (`pip install minyoung-mah[langchain]`). **Langfuse 통합은 라이브러리가 직접 제공하지 않습니다** — LLM-level trace는 소비자가 LiteLLM의 `success_callback = ["langfuse"]`로 구성하고, orchestration-level trace는 `Observer` 프로토콜을 자기 리포에서 구현합니다. 근거는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §6.
+Runtime 의존성은 `pydantic`, `structlog`, `langchain-core`입니다. Orchestrator의 structured fast path와 tool-calling loop가 `BaseChatModel` 인터페이스(`ainvoke` / `bind_tools` / `with_structured_output`)를 실제로 호출하기 때문에 0.1.0부터 `langchain-core`는 required로 선언됩니다. **Langfuse 통합은 라이브러리가 직접 제공하지 않습니다** — LLM-level trace는 소비자가 LiteLLM의 `success_callback = ["langfuse"]`로 구성하고, orchestration-level trace는 `Observer` 프로토콜을 자기 리포에서 구현합니다. 근거는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §6.
 
 ## Phase 상태
 
 - **Phase 1 — Bootstrap & Design Sketch** ✅ 완료
 - **Phase 2a — Library 뼈대 구축** ✅ 완료 (6 protocol + `ExecuteToolsStep` + 33 tests)
 - **경계 재정의** ✅ 완료 (2026-04-15) — co-design 산출물을 `archive/`로 이동, library-only scope 확정
-- **Phase 2b — 제자리 클린업** ✅ 완료 (2026-04-15) — 원본 coding agent 사본 모듈 전부 제거, 의존성 11개 → 2개
-- **Phase 2c — 선택적 확장** ⏸️ 소비자 요구 시 — `run_loop` 설계, `QueueObserver`, `Orchestrator.max_iterations` 하드 스톱
+- **Phase 2b — 제자리 클린업** ✅ 완료 (2026-04-15) — 원본 coding agent 사본 모듈 전부 제거
+- **0.1.0 — 소비자 피드백 반영** ✅ 완료 (2026-04-15) — apt-legal 첫 실소비자 gap 3건 처리: `StaticPipeline.shared_state`, `PipelineStepResult.payload_as`, `RoleInvocationResult.format_for_llm`(INCOMPLETE 배너). 죽은 `run_loop` shape 제거, `langchain-core` required, `default_resilience` `fallback_timeout_s` 90 → 180 (apt-legal 실측 기반). 43 tests.
+- **선택적 확장** ⏸️ 소비자 요구 시 — `QueueObserver`, `Orchestrator.max_iterations` 하드 스톱, contract test suite
 
 ## 관련 프로젝트 (전부 별도 리포)
 

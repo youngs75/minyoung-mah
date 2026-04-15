@@ -1,7 +1,9 @@
 # 01. Core Abstractions — minyoung-mah 라이브러리의 모양
 
-**상태**: Draft 1 · 2026-04-13
-**목적**: minyoung-mah가 외부로 노출할 **6개의 core protocol**을 정의한다. 이 문서가 라이브러리 API surface의 **유일한 계약**이고, 모든 구체 구현(coding agent, apt-legal-agent)은 이 protocol을 composition하는 application이 된다.
+**상태**: Draft 1 · 2026-04-13 / 0.1.0 반영 · 2026-04-15
+**목적**: minyoung-mah가 외부로 노출할 **6개의 core protocol**을 정의한다. 이 문서가 라이브러리 API surface의 **설계 근거**이고, 모든 구체 구현(coding agent, apt-legal-agent)은 이 protocol을 composition하는 application이 된다.
+
+> **0.1.0 갱신 노트**: 이 문서의 초안은 `Orchestrator.run_loop` + `LoopState` + `LoopResult`를 포함했지만, 첫 실소비자(apt-legal-agent)가 시나리오 1~4 구현 과정에서 필요로 하지 않았고, 빈 shape를 유지하는 비용이 추후 구현하는 비용보다 크다는 판단 하에 **0.1.0에서 전면 삭제**됐습니다. 동적 driver-role loop가 필요한 소비자는 `Orchestrator.invoke_role` 위에서 자기 루프를 직접 조립합니다. `04_open_questions.md`의 A1/A2/A6/K1 항목이 그 결정을 기록합니다.
 
 ---
 
@@ -223,25 +225,17 @@ class Orchestrator:
     ) -> PipelineResult:
         """Execute a fixed DAG of roles. Edges are conditional on role output."""
 
-    # ─── Dynamic mode ────────────────────────────────────────
-    async def run_loop(
-        self,
-        driver_role: str,
-        user_request: str,
-        stop_when: Callable[[LoopState], bool],
-    ) -> LoopResult:
-        """Driver role is re-invoked until stop_when() returns True.
-        The driver role can invoke other roles via a `delegate` tool call."""
-
-    # ─── Primitive (둘 다 내부적으로 사용) ───────────────────
+    # ─── Primitive (run_pipeline 내부에서 사용; 소비자가 직접 조립하는
+    #     dynamic driver-role loop의 단위이기도 함) ─────────────
     async def invoke_role(
         self,
         role_name: str,
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
-        """Invoke one role and return its output. This is the unit of work
-        that both static and dynamic modes compose."""
+        """Invoke one role and return its output."""
 ```
+
+> **Note (0.1.0 scope)**: 초안에는 `run_loop(driver_role, stop_when, ...)`이 있었지만, 첫 실소비자(apt-legal-agent) 경험에서 필요 없다는 것이 확인되어 **0.1.0에서 전면 삭제**했습니다. 동적 driver-role loop가 필요한 소비자는 `invoke_role` 위에서 자기 loop를 직접 조립하고, 필요하면 `default_resilience(enable_progress_guard=True)`로 `ProgressGuard`를 활성화합니다. 배경: 이전 초안의 `run_loop` shape는 코딩 에이전트 이식 때 거의 확실히 재설계가 필요한 부채였고, 빈 껍데기를 유지하는 비용이 나중에 구현하는 비용보다 컸습니다.
 
 ### `StaticPipeline` (static mode 전용)
 
@@ -267,31 +261,50 @@ class StaticPipeline:
 - **Dynamic mode의 driver는 일반 role**: 특수 역할이 아니라 "delegate tool을 쓸 수 있는 role". 즉 Orchestrator는 driver role에게 `delegate(role_name, task_summary)` tool을 자동으로 제공한다.
 - **`fan_out`은 apt-legal의 priority-based parallel tool call**을 수용. planner가 3개의 search_law 호출을 만들면 같은 role을 3번 병렬 invoke.
 
-### 두 모드 사용 예
+### 사용 예 (0.1.0)
 
 ```python
-# Coding agent (dynamic)
-result = await orch.run_loop(
-    driver_role="planner",
-    user_request=user_input,
-    stop_when=lambda state: state.driver_returned_final_summary,
+# apt-legal (static, 실소비자 패턴)
+pipeline = StaticPipeline(
+    shared_state={"complex_id": complex_id},  # 모든 step의 InvocationContext에 자동 merge
+    steps=[
+        PipelineStep(
+            name="route",
+            role="router",
+            input_mapping=lambda state: InvocationContext(
+                task_summary="질의 라우팅", user_request=""
+            ),
+        ),
+        PipelineStep(
+            name="legal_lookup",
+            role="legal_lookup",
+            condition=lambda state: bool(
+                (d := state["route"].payload_as(RouterDecision)) and d.need_legal
+            ),
+            input_mapping=lambda state: InvocationContext(
+                task_summary="국가 법령 조회", user_request=""
+            ),
+        ),
+        PipelineStep(
+            name="synthesize",
+            role="synthesizer",
+            input_mapping=lambda state: InvocationContext(
+                task_summary="최종 답변", user_request="", parent_outputs=state
+            ),
+        ),
+    ],
 )
-
-# apt-legal (static)
-pipeline = StaticPipeline(steps=[
-    PipelineStep(role="classifier", input_mapping=..., condition=None),
-    PipelineStep(role="retrieval_planner", input_mapping=..., condition=None),
-    PipelineStep(
-        role="retrieval_executor",
-        input_mapping=...,
-        fan_out=lambda state: [
-            ctx_from_plan_step(s) for s in state["retrieval_planner"].output.steps
-        ],  # parallel MCP calls
-    ),
-    PipelineStep(role="responder", input_mapping=..., condition=None),
-])
 result = await orch.run_pipeline(pipeline, user_request=user_input)
+
+# Synthesizer의 build_user_message 안에서 상태 배너와 함께 읽기
+for step_name, step_result in (ctx.parent_outputs or {}).items():
+    if isinstance(step_result, PipelineStepResult):
+        block = step_result.format_for_llm()  # INCOMPLETE 상태는 배너로 surface
+        if block:
+            parts.append(f"\n[{step_name}]\n{block}")
 ```
+
+동적 driver-role loop가 필요하면 소비자가 `invoke_role`을 자기 while 루프에서 호출하고 stop 조건을 직접 평가합니다. Library는 `ProgressGuard` / `ResiliencePolicy`만 제공합니다.
 
 ---
 
@@ -426,70 +439,81 @@ hitl = A2AHITLChannel(task_id=task_id, sse_emitter=emitter)
 
 ## 라이브러리 composition 예
 
-### Coding agent
+### Coding agent (가상 — dynamic driver-role loop)
+
+Library가 `run_loop`을 더 이상 제공하지 않으므로, 코딩 에이전트 같은 동적 topology는 소비자가 `invoke_role`을 자기 while 루프로 감싸는 형태가 됩니다.
 
 ```python
 from minyoung_mah import Orchestrator, SqliteMemoryStore, TieredModelRouter, \
-    TerminalHITLChannel, default_resilience, langfuse_observer
-
-from my_coding_agent.roles import PLANNER, CODER, VERIFIER, FIXER, REVIEWER
-from my_coding_agent.tools import ShellToolAdapter, FileOpsToolAdapter, TodoToolAdapter
-
-role_reg = RoleRegistry.of(PLANNER, CODER, VERIFIER, FIXER, REVIEWER)
-tool_reg = ToolRegistry.of(ShellToolAdapter(), FileOpsToolAdapter(), TodoToolAdapter())
+    TerminalHITLChannel, default_resilience, StructlogObserver, InvocationContext
 
 orch = Orchestrator(
     role_registry=role_reg,
     tool_registry=tool_reg,
-    model_router=TieredModelRouter({
-        "reasoning": qwen3_max,
-        "strong": qwen3_coder_plus,
-        "default": qwen3_coder_plus,
-        "fast": qwen3_flash,
-    }),
-    memory=SqliteMemoryStore("memory.db", tiers=["user", "project", "domain"]),
+    model_router=TieredModelRouter({"reasoning": qwen3_max, "default": qwen3_coder_plus}),
+    memory=SqliteMemoryStore("memory.db"),
     hitl=TerminalHITLChannel(),
-    resilience=default_resilience(),
-    observer=langfuse_observer(),
+    # 동적 loop에서는 ProgressGuard 활성화 권장 — 반복 탐지는 library가 제공
+    resilience=default_resilience(enable_progress_guard=True),
+    observer=StructlogObserver(),
 )
 
-result = await orch.run_loop(
-    driver_role="planner",
-    user_request=user_input,
-    stop_when=final_summary_detected,
-)
+ctx = InvocationContext(task_summary="implement feature X", user_request=user_input)
+while True:
+    result = await orch.invoke_role("planner", ctx)
+    if final_summary_detected(result):
+        break
+    ctx = next_context_from(result)
 ```
 
-### apt-legal-agent
+### apt-legal-agent (실소비자 — static pipeline)
+
+실제로 동작하는 패턴은 [`examples/apt_legal_minimal.py`](../../examples/apt_legal_minimal.py)에 단일 파일로 박제되어 있습니다. 요약:
 
 ```python
-from minyoung_mah import Orchestrator, NullMemoryStore, SingleModelRouter, \
-    default_resilience, langfuse_observer, StaticPipeline, PipelineStep
+from minyoung_mah import (
+    Orchestrator, NullMemoryStore, SingleModelRouter,
+    StaticPipeline, PipelineStep, InvocationContext,
+    StructlogObserver, default_resilience,
+)
 
-from apt_legal.roles import CLASSIFIER, RETRIEVAL_PLANNER, RESPONDER
-from apt_legal.tools import make_mcp_tool_adapters
-from apt_legal.hitl import A2AHITLChannel
+pipeline = StaticPipeline(
+    shared_state={"complex_id": complex_id},  # 모든 step에 자동 merge
+    steps=[
+        PipelineStep(
+            name="route",
+            role="router",
+            input_mapping=lambda s: InvocationContext(task_summary="라우팅", user_request=""),
+        ),
+        PipelineStep(
+            name="legal_lookup",
+            role="legal_lookup",
+            condition=lambda s: bool(
+                (d := s["route"].payload_as(RouterDecision)) and d.need_legal
+            ),
+            input_mapping=lambda s: InvocationContext(task_summary="법령 조회", user_request=""),
+        ),
+        PipelineStep(
+            name="synthesize",
+            role="synthesizer",
+            input_mapping=lambda s: InvocationContext(
+                task_summary="합성", user_request="", parent_outputs=s
+            ),
+        ),
+    ],
+)
 
-role_reg = RoleRegistry.of(CLASSIFIER, RETRIEVAL_PLANNER, RESPONDER)
-tool_reg = ToolRegistry.of(*make_mcp_tool_adapters(mcp_client))
-
-async def handle_a2a_task(task_id, user_request, sse_emitter):
-    orch = Orchestrator(
-        role_registry=role_reg,
-        tool_registry=tool_reg,
-        model_router=SingleModelRouter(gpt_4o),
-        memory=NullMemoryStore(),
-        hitl=A2AHITLChannel(task_id, sse_emitter),
-        resilience=default_resilience(),
-        observer=langfuse_observer(),
-    )
-    pipeline = StaticPipeline(steps=[
-        PipelineStep(role="classifier", ...),
-        PipelineStep(role="retrieval_planner", ...),
-        PipelineStep(role="retrieval_executor", fan_out=...),  # parallel MCP calls
-        PipelineStep(role="responder", ...),
-    ])
-    return await orch.run_pipeline(pipeline, user_request=user_request)
+orch = Orchestrator(
+    role_registry=role_reg,
+    tool_registry=tool_reg,  # MCP tool adapters
+    model_router=SingleModelRouter(chat_litellm),
+    memory=NullMemoryStore(),
+    observer=StructlogObserver(),
+    resilience=default_resilience(
+        role_timeouts={"router": 30, "legal_lookup": 300, "synthesizer": 120},
+    ),
+)
+result = await orch.run_pipeline(pipeline, user_request=user_request)
 ```
 
 ---
@@ -513,7 +537,7 @@ async def handle_a2a_task(task_id, user_request, sse_emitter):
 이 sketch에서 확신이 부족한 지점들을 04_open_questions.md로 넘긴다:
 
 1. **Dynamic mode의 `delegate` tool** — 라이브러리가 자동 제공하는 tool이어야 하나, 아니면 application이 수동 등록하는 tool이어야 하나?
-2. **Memory extractor의 timing** — `run_loop`/`run_pipeline` **완료 후** 한 번? 중간 단계마다? Extractor 자체가 LLM을 쓴다면 HITLChannel을 쓸 권한이 있나?
+2. **Memory extractor의 timing** — `run_pipeline` **완료 후** 한 번? 중간 단계마다? Extractor 자체가 LLM을 쓴다면 HITLChannel을 쓸 권한이 있나?
 3. **`InvocationContext.shared_state`의 동시성** — static mode의 fan_out에서 여러 role이 동시에 write하면? 락? merge function?
 4. **`ToolResult.value`의 타입** — `Any`로 두면 LLM에 전달할 때 직렬화 책임이 애매. 라이브러리가 `str` 또는 `BaseModel`로 좁혀야 하나?
 5. **Role의 `output_schema`와 free-form 전환** — structured output을 요구하는 role이 tool_call도 할 수 있어야 하나? 두 개를 섞으면 LLM이 혼란.

@@ -23,9 +23,22 @@ class ResiliencePolicy:
 
 ## `default_resilience()` 기본값의 근거
 
-- `fallback_timeout_s=90` — apt-legal의 10~30초 역할과 coding의 180초 coder 사이 중간값. 9차 E2E 실증에서 도출.
+- `fallback_timeout_s=180` — apt-legal 실소비자 경험(2026-04-15)에서 도출. 90초 기본값은 15-tool MCP 카탈로그를 자율 탐색하는 `legal_lookup` 같은 역할에 턱없이 부족했고, 즉시 watchdog abort가 터졌습니다. 180초는 단일 역할 예산을 대부분 provider의 request timeout 내로 유지하면서 multi-tool deliberation 여유를 남깁니다.
 - `fallback_max_retries=1` — semantic retry는 한 번까지. 그 이상은 escalate.
-- `progress_guard` **기본 disabled** — Phase 2a는 정적 파이프라인이라 반복이 구성 시점에 이미 bounded입니다. 동적 loop(Phase 4 `run_loop`)에서만 활성화하세요: `default_resilience(enable_progress_guard=True)`.
+- `progress_guard` **기본 disabled** — 정적 파이프라인은 반복이 구성 시점에 이미 bounded입니다. 소비자가 `invoke_role` 위에서 동적 driver-role loop를 조립할 때만 `default_resilience(enable_progress_guard=True)`로 활성화하세요.
+
+### apt-legal 실측 예시 (권장 per-role override)
+
+```python
+default_resilience(
+    role_timeouts={
+        "router": 30.0,          # structured fast path, 1 LLM call
+        "domain_lookup": 240.0,  # 8-tool MCP, up to 10 iterations
+        "legal_lookup": 300.0,   # 15-tool MCP, up to 10 iterations
+        "synthesizer": 120.0,    # 1 LLM call over accumulated state
+    },
+)
+```
 
 ## 두 retry 레이어 구분 (중요)
 

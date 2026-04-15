@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel
 
 from .types import (
@@ -83,9 +84,13 @@ class ToolAdapter(Protocol):
 
 
 # A ``ModelHandle`` is any object that satisfies the LangChain
-# ``BaseChatModel`` interface that the Orchestrator uses. Kept as ``Any`` here
-# to avoid forcing a hard import on tests.
-ModelHandle = Any
+# :class:`BaseChatModel` surface the Orchestrator uses:
+# ``ainvoke``, ``bind_tools``, and ``with_structured_output``. We alias
+# it to :class:`BaseChatModel` so consumers get real type checking —
+# ``Any`` was a polite fiction that hid the actual requirement. Test
+# fixtures that duck-type a subset of the interface still work at
+# runtime because the Orchestrator only calls the subset it needs.
+ModelHandle = BaseChatModel
 
 
 @runtime_checkable

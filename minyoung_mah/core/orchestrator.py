@@ -1,4 +1,4 @@
-"""The Orchestrator — static pipeline executor for Phase 2a.
+"""The Orchestrator — static pipeline executor.
 
 Responsibilities
 ----------------
@@ -11,9 +11,6 @@ Responsibilities
 What this module is *not* responsible for: choosing which role to invoke
 next (applications declare that via :class:`StaticPipeline`), domain
 prompts, or tool implementations.
-
-``run_loop`` is declared but raises ``NotImplementedError`` — dynamic mode
-is deferred to Phase 4 per decision J1 and the Phase 2a scope vote (b).
 """
 
 from __future__ import annotations
@@ -23,7 +20,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable
 
 from pydantic import BaseModel
 
@@ -44,7 +41,6 @@ from .tool_invocation import ToolInvocationEngine
 from .types import (
     ExecuteToolsStep,
     InvocationContext,
-    LoopResult,
     ObserverEvent,
     PipelineResult,
     PipelineState,
@@ -66,8 +62,10 @@ class Orchestrator:
     """Composes the six core protocols to run pipelines.
 
     See ``docs/design/01_core_abstractions.md`` §3 for the design rationale.
-    The public surface is three methods: :meth:`run_pipeline` (static DAG),
-    :meth:`invoke_role` (atomic unit), and :meth:`run_loop` (dynamic, Phase 4).
+    The public surface is two methods: :meth:`run_pipeline` (static DAG)
+    and :meth:`invoke_role` (atomic unit). Dynamic driver-role loops are
+    intentionally out of scope; applications that need a dynamic shape
+    build it on top of ``invoke_role`` themselves.
     """
 
     def __init__(
@@ -118,7 +116,13 @@ class Orchestrator:
 
         try:
             for step in pipeline.steps:
-                step_result = await self._run_step(step, state, user_request, run_id)
+                step_result = await self._run_step(
+                    step,
+                    state,
+                    user_request,
+                    run_id,
+                    pipeline_shared_state=pipeline.shared_state,
+                )
                 state[step.name] = step_result
 
                 if step_result.skipped:
@@ -238,27 +242,6 @@ class Orchestrator:
         return result
 
     # ------------------------------------------------------------------
-    # Public: dynamic loop (Phase 4)
-    # ------------------------------------------------------------------
-
-    async def run_loop(
-        self,
-        driver_role: str,
-        user_request: str,
-        stop_when: Callable[[Any], bool],
-    ) -> LoopResult:
-        """Deferred to Phase 4 per decision J1 and the Phase 2a scope vote.
-
-        Phase 2a ships static pipelines only; apt-legal (Phase 3) does not
-        need ``run_loop``. The coding agent (Phase 4) brings it back along
-        with the ``delegate`` tool factory.
-        """
-        raise NotImplementedError(
-            "run_loop is deferred to Phase 4 — use run_pipeline for now "
-            "(see docs/design/04_open_questions.md §J1)."
-        )
-
-    # ------------------------------------------------------------------
     # Internal: single step execution (incl. fan_out)
     # ------------------------------------------------------------------
 
@@ -268,10 +251,14 @@ class Orchestrator:
         state: PipelineState,
         user_request: str,
         run_id: str,
+        *,
+        pipeline_shared_state: dict[str, Any],
     ) -> PipelineStepResult:
         if isinstance(step, ExecuteToolsStep):
             return await self._run_execute_tools_step(step, state, run_id)
-        return await self._run_role_step(step, state, user_request, run_id)
+        return await self._run_role_step(
+            step, state, user_request, run_id, pipeline_shared_state
+        )
 
     async def _run_role_step(
         self,
@@ -279,6 +266,7 @@ class Orchestrator:
         state: PipelineState,
         user_request: str,
         run_id: str,
+        pipeline_shared_state: dict[str, Any],
     ) -> PipelineStepResult:
         if step.condition is not None and not step.condition(state):
             await self._emit(
@@ -304,13 +292,16 @@ class Orchestrator:
 
         if step.fan_out is not None:
             contexts = step.fan_out(state)
-            contexts = [self._ensure_user_request(c, user_request) for c in contexts]
+            contexts = [
+                self._prepare_ctx(c, user_request, pipeline_shared_state)
+                for c in contexts
+            ]
             outputs = await asyncio.gather(
                 *(self.invoke_role(step.role, c) for c in contexts)
             )
         else:
             ctx = step.input_mapping(state)
-            ctx = self._ensure_user_request(ctx, user_request)
+            ctx = self._prepare_ctx(ctx, user_request, pipeline_shared_state)
             outputs = [await self.invoke_role(step.role, ctx)]
 
         all_ok = all(o.status is RoleStatus.COMPLETED for o in outputs)
@@ -588,18 +579,34 @@ class Orchestrator:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _ensure_user_request(
+    def _prepare_ctx(
         self,
         ctx: InvocationContext,
         user_request: str,
+        pipeline_shared_state: dict[str, Any],
     ) -> InvocationContext:
-        if ctx.user_request:
+        """Backfill ``user_request`` and merge ``pipeline.shared_state``.
+
+        The merge is pipeline-first-then-step so that any key a step
+        explicitly sets in its ``input_mapping`` wins over a pipeline
+        default. This is the opposite of Python's ``{**a, **b}`` order —
+        we prefer the step-level value, so the pipeline default comes
+        first.
+        """
+        needs_user_request = not ctx.user_request
+        needs_shared_merge = bool(pipeline_shared_state)
+        if not needs_user_request and not needs_shared_merge:
             return ctx
+        merged_shared = (
+            {**pipeline_shared_state, **(ctx.shared_state or {})}
+            if needs_shared_merge
+            else ctx.shared_state
+        )
         return InvocationContext(
             task_summary=ctx.task_summary,
-            user_request=user_request,
+            user_request=ctx.user_request or user_request,
             parent_outputs=ctx.parent_outputs,
-            shared_state=ctx.shared_state,
+            shared_state=merged_shared,
             memory_snippets=ctx.memory_snippets,
             metadata=ctx.metadata,
         )

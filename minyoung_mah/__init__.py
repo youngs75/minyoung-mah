@@ -56,7 +56,7 @@ from .observer import (
 )
 from .resilience.policy import ResiliencePolicy, default_resilience
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 __all__ = [
     "CollectingObserver",

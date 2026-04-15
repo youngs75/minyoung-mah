@@ -8,7 +8,7 @@
 |---|---|---|
 | `protocols.py` | 6 Core Protocol (`SubAgentRole`, `ToolAdapter`, `ModelRouter`, `MemoryStore`, `HITLChannel`, `Observer`) + optional `MemoryExtractor` | 시그니처 변경은 **파급 효과가 큽니다**. `docs/design/01_core_abstractions.md`와 `docs/ARCHITECTURE.md`를 같은 커밋에서 갱신하고, 모든 기본 구현과 테스트가 새 계약을 만족하는지 확인. |
 | `types.py` | passive dataclass/Enum만 (`InvocationContext`, `RoleInvocationResult`, `ToolResult`, `StaticPipeline`, `ExecuteToolsStep`, `ObserverEvent` 등). **active 객체 금지**. | 새 타입은 dataclass 또는 Enum으로만. 여기에 메서드를 쌓기 시작하면 protocols와 책임이 섞입니다. |
-| `orchestrator.py` | `Orchestrator` 클래스. `run_pipeline` / `invoke_role` / (아직 `NotImplementedError`인) `run_loop`. 구조화 출력 fast path와 툴 호출 루프의 두 경로 분기. | 5책임 중 **Safety/Detection/Clarity/Context/Observation을 모두 집행**하는 지점. 옵저버 emit 위치를 추가·삭제하면 canonical event 세트가 흔들립니다. `EVENT_NAMES`와 동기화 필수. |
+| `orchestrator.py` | `Orchestrator` 클래스. `run_pipeline` / `invoke_role`. 구조화 출력 fast path와 툴 호출 루프의 두 경로 분기. `pipeline.shared_state`를 각 step의 `InvocationContext`에 merge(step 값이 우선). | 5책임 중 **Safety/Detection/Clarity/Context/Observation을 모두 집행**하는 지점. 옵저버 emit 위치를 추가·삭제하면 canonical event 세트가 흔들립니다. `EVENT_NAMES`와 동기화 필수. 동적 driver-role loop는 0.1.0에서 삭제 — 소비자가 `invoke_role` 위에서 직접 조립합니다. |
 | `registry.py` | `RoleRegistry`, `ToolRegistry`. 이름→객체 매핑의 얇은 래퍼. | 이름 충돌과 allowlist 필터링만 책임. 조회 이상의 로직(캐싱, TTL)을 넣지 않습니다. |
 | `tool_invocation.py` | `ToolInvocationEngine` — 단일/병렬 tool call, tool-level 전이 오류 retry, observer emit. | retry는 `TRANSIENT_ERRORS`(`TIMEOUT`, `RATE_LIMIT`, `NETWORK`)만. 여기에 semantic retry를 섞지 않습니다 (그건 role 레벨). |
 

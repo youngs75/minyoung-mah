@@ -11,12 +11,15 @@ boundaries.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +123,65 @@ class RoleInvocationResult:
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def has_usable_output(self) -> bool:
+        """True iff status is COMPLETED and ``output`` is not None.
+
+        Use this in ``build_user_message`` / synthesizer prompts to decide
+        whether to feed a result downstream. A role that ran out of
+        iterations (``INCOMPLETE``) may have a partial ``output`` but the
+        consumer should treat it as unreliable.
+        """
+        return self.status is RoleStatus.COMPLETED and self.output is not None
+
+    def output_text(self) -> str:
+        """Serialize ``output`` to a string the LLM can read.
+
+        - ``None`` → empty string
+        - ``str`` → as-is
+        - ``BaseModel`` → ``model_dump_json()``
+        - ``dict`` → ``json.dumps(..., ensure_ascii=False)``
+        - other → ``str(value)``
+        """
+        value = self.output
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, BaseModel):
+            return value.model_dump_json()
+        if isinstance(value, dict):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except (TypeError, ValueError):
+                return str(value)
+        return str(value)
+
+    def format_for_llm(self, *, include_incomplete: bool = True) -> str:
+        """Return a labeled block suitable for inclusion in a downstream prompt.
+
+        Shape::
+
+            [role=<name> status=<STATUS> iterations=<N>]
+            <output_text or '(no output)'>
+
+        If the role is not usable (``INCOMPLETE``/``FAILED``/``ABORTED``) and
+        ``include_incomplete=False``, returns an empty string. The default
+        ``True`` surfaces partial results with their status banner so the
+        downstream LLM can treat them as suspect rather than silently
+        trusting them (the apt-legal scenario-3 hallucination trap).
+        """
+        if not self.has_usable_output and not include_incomplete:
+            return ""
+        body = self.output_text() or "(no output)"
+        header = (
+            f"[role={self.role_name} status={self.status.name} "
+            f"iterations={self.iterations}]"
+        )
+        if self.error and not self.has_usable_output:
+            header += f" error={self.error}"
+        return f"{header}\n{body}"
+
 
 # ---------------------------------------------------------------------------
 # Static pipeline definition
@@ -147,7 +209,55 @@ class PipelineStepResult:
 
     @property
     def output(self) -> RoleInvocationResult | None:
+        """First role-invocation result, or ``None`` when the step was
+        skipped / tool-only / fan_out empty.
+
+        Prefer :attr:`payload` or :meth:`payload_as` for the actual value
+        produced by the role. Prefer :meth:`format_for_llm` when feeding
+        downstream synthesizers.
+        """
         return self.outputs[0] if self.outputs else None
+
+    @property
+    def payload(self) -> Any:
+        """Return the first role invocation's ``.output`` payload.
+
+        Shortcut for the common ``state["step"].output.output`` access
+        pattern — returns ``None`` if the step is skipped, empty, or the
+        first output has no value.
+        """
+        out = self.output
+        if out is None:
+            return None
+        return out.output
+
+    def payload_as(self, cls: type[T]) -> T | None:
+        """Return :attr:`payload` when it is an instance of ``cls``, else ``None``.
+
+        Typed accessor for structured-output roles. Typical usage::
+
+            decision = state["route"].payload_as(RouterDecision)
+            if decision and decision.need_legal:
+                ...
+        """
+        payload = self.payload
+        if isinstance(payload, cls):
+            return payload
+        return None
+
+    def format_for_llm(self, *, include_incomplete: bool = True) -> str:
+        """Concatenate every role invocation's ``format_for_llm`` output.
+
+        ``fan_out`` steps produce N blocks separated by blank lines. Tool-
+        only / skipped steps return an empty string. See
+        :meth:`RoleInvocationResult.format_for_llm` for the shape of each
+        block and the rationale for surfacing INCOMPLETE results.
+        """
+        blocks = [
+            out.format_for_llm(include_incomplete=include_incomplete)
+            for out in self.outputs
+        ]
+        return "\n\n".join(b for b in blocks if b)
 
 
 @dataclass
@@ -204,8 +314,18 @@ class ExecuteToolsStep:
 
 @dataclass
 class StaticPipeline:
+    """Declaration of a sequential DAG of steps plus pipeline-wide context.
+
+    ``shared_state`` is merged into every step's
+    :class:`InvocationContext` before the role runs — per-step
+    ``input_mapping`` values win on key conflicts. Use it for constants
+    that every role needs to see (e.g. ``{"complex_id": "..."}``) so
+    each ``input_mapping`` does not have to re-copy the same dict.
+    """
+
     steps: list[PipelineStep | ExecuteToolsStep]
     on_step_failure: Literal["abort", "continue", "escalate_hitl"] = "abort"
+    shared_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -215,29 +335,6 @@ class PipelineResult:
     aborted_at: str | None = None
     error: str | None = None
     duration_ms: int = 0
-
-
-# ---------------------------------------------------------------------------
-# Dynamic loop (run_loop) — declared here so tests can import even though the
-# actual implementation is deferred to Phase 4.
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class LoopState:
-    driver_role: str
-    iterations: int
-    last_result: RoleInvocationResult | None
-    driver_returned_final: bool
-    shared_state: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class LoopResult:
-    final_output: str | BaseModel | dict[str, Any] | None
-    iterations: int
-    completed: bool
-    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
