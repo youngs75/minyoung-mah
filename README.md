@@ -36,7 +36,7 @@ Harness는 결과물의 형식이나 역할 구조를 강제하지 않습니다.
 | 5 | `MemoryStore` | "이 정보를 기억하고 꺼낸다" — tier 이름 configurable |
 | 6 | `HITLChannel` | "사용자에게 묻고 응답을 받는다" — 채널 독립 |
 
-자세한 시그니처는 [`docs/design/01_core_abstractions.md`](docs/design/01_core_abstractions.md) 참조. 참고용 topology 패턴(Deep Insight 3-tier 등)은 [`docs/design/05_reference_topologies.md`](docs/design/05_reference_topologies.md) 참조.
+전체 그림(실행 경로, 데이터 흐름, canonical event, retry 레이어 분할 등)은 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)에서 한 번에 볼 수 있습니다. 개별 프로토콜 시그니처의 설계 근거는 [`docs/design/01_core_abstractions.md`](docs/design/01_core_abstractions.md), 참고용 topology 패턴(Deep Insight 3-tier 등)은 [`docs/design/05_reference_topologies.md`](docs/design/05_reference_topologies.md) 참조.
 
 ## 설치 및 사용
 
@@ -52,7 +52,7 @@ pip install -e .
 pytest tests/library/     # 33 tests, 초 단위 완주, 네트워크 없음
 ```
 
-Runtime 의존성은 `pydantic`과 `structlog` 둘뿐입니다. Langfuse 통합, langchain 메시지 호환은 optional extras로 제공됩니다 (`pip install minyoung-mah[langfuse,langchain]`).
+Runtime 의존성은 `pydantic`과 `structlog` 둘뿐입니다. langchain 메시지 호환은 optional extra로 제공됩니다 (`pip install minyoung-mah[langchain]`). **Langfuse 통합은 라이브러리가 직접 제공하지 않습니다** — LLM-level trace는 소비자가 LiteLLM의 `success_callback = ["langfuse"]`로 구성하고, orchestration-level trace는 `Observer` 프로토콜을 자기 리포에서 구현합니다. 근거는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §6.
 
 ## Phase 상태
 
@@ -60,16 +60,28 @@ Runtime 의존성은 `pydantic`과 `structlog` 둘뿐입니다. Langfuse 통합,
 - **Phase 2a — Library 뼈대 구축** ✅ 완료 (6 protocol + `ExecuteToolsStep` + 33 tests)
 - **경계 재정의** ✅ 완료 (2026-04-15) — co-design 산출물을 `archive/`로 이동, library-only scope 확정
 - **Phase 2b — 제자리 클린업** ✅ 완료 (2026-04-15) — 원본 coding agent 사본 모듈 전부 제거, 의존성 11개 → 2개
-- **Phase 2c — 선택적 확장** ⏸️ 필요할 때 — `run_loop` 설계, `QueueObserver`, `Orchestrator.max_iterations` 하드 스톱, Langfuse adapter 실구현
+- **Phase 2c — 선택적 확장** ⏸️ 소비자 요구 시 — `run_loop` 설계, `QueueObserver`, `Orchestrator.max_iterations` 하드 스톱
 
 ## 관련 프로젝트 (전부 별도 리포)
 
 - [`../ax_advanced_coding_ai_agent/`](../ax_advanced_coding_ai_agent) — 전신 프로젝트. 2026-04-12 과제 제출 후 동결. 9차 세션까지의 설계 서사가 `docs/origin/`에 보존됨.
 - [`../apt-legal-agent/`](../apt-legal-agent) — Vertical AI Agent (공동주택 법률 도우미). minyoung-mah의 first real consumer. Phase 0 완료, 코드 구현은 Phase 2 예정. 2-MCP 서버 토폴로지 (`kor-legal-mcp` + `apt-domain-mcp`).
 
+## 문서 지도
+
+| 문서 | 언제 읽나 |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 라이브러리의 전체 그림을 처음 볼 때. 실행 경로, 데이터 흐름, canonical event, retry 분할, fast/general path를 한 번에. |
+| [`AGENTS.md`](AGENTS.md) | 리포 전체 규칙, Phase 상태, 커밋·세션 규칙. |
+| [`minyoung_mah/AGENTS.md`](minyoung_mah/AGENTS.md) 및 각 서브모듈의 `AGENTS.md` | 패키지 내부에 코드를 추가·수정할 때. 서브모듈(`core/`, `hitl/`, `memory/`, `model/`, `observer/`, `resilience/`)마다 규칙을 따로 둡니다. |
+| [`docs/design/01_core_abstractions.md`](docs/design/01_core_abstractions.md) | 6 protocol 시그니처의 설계 근거. |
+| [`docs/design/04_open_questions.md`](docs/design/04_open_questions.md) | 미결·OBSOLETE 결정 이력. |
+| [`docs/design/05_reference_topologies.md`](docs/design/05_reference_topologies.md) | 소비자가 참고할 수 있는 토폴로지 패턴 박제 (강제 아님). |
+| [`docs/origin/`](docs/origin/) | 원본 프로젝트(`ax_advanced_coding_ai_agent`)의 7~9차 세션 서사. 읽기 전용. |
+
 ## 기여 가이드
 
-`AGENTS.md` 참조. 소비자 특화 코드를 이 리포에 추가하려는 충동이 들면 멈추고, library로 추상화 가능한지 먼저 점검합니다. 추상화가 어색하면 그건 소비자 리포에 있어야 할 코드입니다.
+[`AGENTS.md`](AGENTS.md) 참조. 소비자 특화 코드를 이 리포에 추가하려는 충동이 들면 멈추고, library로 추상화 가능한지 먼저 점검합니다. 추상화가 어색하면 그건 소비자 리포에 있어야 할 코드입니다.
 
 ## 라이선스
 
