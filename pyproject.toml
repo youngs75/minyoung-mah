@@ -19,10 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 # Optional integrations surface only if the consumer opts in.
-# - langfuse: for the (future) LangfuseObserver adapter
 # - langchain: for consumers who want to pass langchain_core messages through
 #              the orchestrator's role-invocation path
-langfuse = ["langfuse>=2.0"]
+#
+# Note: there is intentionally no [langfuse] extra. The library does not ship
+# an LLM-level trace adapter — consumers wire Langfuse at the LiteLLM layer
+# via `litellm.success_callback = ["langfuse"]`. The library's Observer
+# protocol stays at orchestration level. See docs/design/05_reference_topologies.md.
 langchain = ["langchain-core>=0.3"]
 
 [dependency-groups]

@@ -511,13 +511,17 @@ Phase 2b 클린업이 끝난 시점에서 library가 다음에 진행할 수 있
 
 **권장**: `run_loop` 설계 시 같이 결정. static pipeline은 step 수가 구조적으로 bounded라 필요 없음. dynamic loop에서만 의미 있는 가드.
 
-### K4. Langfuse observer 실구현 [OPEN]
+### K4. Langfuse observer 실구현 [OBSOLETE — 2026-04-15]
 
-**맥락**: 현재 `observer/events.py`에 Langfuse adapter가 없다 (grep 결과 0건). `pyproject.toml`의 optional extra(`[langfuse]`)만 선언해둔 상태.
+**결정**: library는 Langfuse adapter를 **직접 구현하지 않는다**. `pyproject.toml`의 `[langfuse]` optional extra도 제거됨.
 
-**질문**: 언제 실제 구현을 하는가?
+**원칙 (LiteLLM 뒷단 Langfuse)**:
+- library는 LLM을 직접 호출하지 않는다. `ModelRouter`는 "어떤 모델을 쓸지"만 알려주고 실제 호출은 소비자 책임.
+- **LLM-level trace** (prompt / completion / token usage)는 소비자가 LiteLLM의 자동 Langfuse 통합으로 커버한다: `litellm.success_callback = ["langfuse"]`.
+- **Orchestration-level trace** (`orchestrator.run.*`, `role.invoke.*`, `pipeline.step.*`, `tool.call.*`)는 library의 `Observer` 프로토콜이 담당한다.
+- 두 층은 같은 `trace_id`로 Langfuse에서 연결 가능 (LiteLLM metadata 또는 Observer metadata를 통해 전달) — 구성은 소비자 책임.
 
-**권장**: 소비자 중 하나가 Langfuse dashboard를 실제로 켜고 트레이스를 보고 싶어할 때. 그 전까지는 `StructlogObserver`로 충분.
+**결과**: library에 Langfuse SDK 의존성이 없고, Observer 구현은 `Null/Collecting/Structlog/Composite` 4종만 유지. 자세한 서술은 `05_reference_topologies.md`의 "Observability 층 분할" 참조.
 
 ### K5. pyproject.toml 의존성 재재검토 [OPEN]
 

@@ -52,7 +52,7 @@ Tool Agents (병렬)
 
 ### 학습 포인트
 
-1. **Streaming event queue 패턴.** Deep Insight는 workflow를 백그라운드 `asyncio.Task`로 돌리고, tool agent들은 전역 `deque` + `threading.Lock`에 이벤트를 push, main loop가 consume한다. minyoung-mah의 `Observer`가 이 역할을 이미 수행하지만, **streaming 전용 `QueueObserver`** (application이 주입하는 `asyncio.Queue`로 이벤트를 forward)를 추가하면 FastAPI SSE/WebSocket과의 통합이 쉬워진다. Phase 2c 후보.
+1. **Streaming event queue 패턴.** Deep Insight는 workflow를 백그라운드 `asyncio.Task`로 돌리고, tool agent들은 전역 `deque` + `threading.Lock`에 이벤트를 push, main loop가 consume한다. minyoung-mah의 `Observer`가 이 역할을 이미 수행하지만, **streaming 전용 `QueueObserver`** (application이 주입하는 `asyncio.Queue`로 이벤트를 forward)를 추가하면 FastAPI SSE/WebSocket과의 통합이 쉬워진다. Phase 2c 후보. 단, 이 패턴은 **orchestration-level 이벤트**만 다루고 LLM-level trace(prompt/completion/tokens)와는 무관하다 — 후자는 아래 "Observability 층 분할"에서 설명하는 LiteLLM callback이 담당한다.
 
 2. **Execution 하드 리미트 vs 정체 감지는 별개.** Deep Insight의 `set_max_node_executions(25)`는 "총 몇 번 실행했는가"를 세고, minyoung-mah의 `ProgressGuard`는 "같은 tool을 같은 args로 반복 호출하는가"를 본다. 두 가드가 직교한다. Phase 2c에서 Orchestrator에 `max_iterations` 하드 스톱을 명시적으로 넣는 것을 검토한다.
 
@@ -62,7 +62,48 @@ Tool Agents (병렬)
 
 ---
 
-## 2. (미정) 다른 레퍼런스 패턴
+## 2. Observability 층 분할 — LiteLLM 뒷단 Langfuse
+
+minyoung-mah는 **orchestration-level trace**만 책임진다. LLM 호출 자체에 대한 trace(prompt/completion/token usage)는 **소비자가 LiteLLM의 callback 훅으로** 구성한다. 이 분할이 라이브러리의 "LLM을 직접 호출하지 않는다"는 원칙과 정확히 맞물린다.
+
+### 두 층의 책임 분할
+
+| 층 | 담당 | 누가 구현 | 이벤트 예시 |
+|---|---|---|---|
+| **LLM-level** | 모델 호출의 입출력·토큰·지연 | 소비자 (LiteLLM callback) | `prompt`, `completion`, `prompt_tokens`, `completion_tokens`, `model_id`, `latency_ms` |
+| **Orchestration-level** | 역할 실행·도구 호출·파이프라인 진행 | minyoung-mah `Observer` | `orchestrator.run.start/end`, `role.invoke.start/end`, `pipeline.step.*`, `tool.call.*` |
+
+### 소비자가 구성하는 방법
+
+```python
+import litellm
+litellm.success_callback = ["langfuse"]           # LLM-level 자동 전송
+litellm.failure_callback = ["langfuse"]
+
+# minyoung-mah 쪽은 Observer로 orchestration-level 이벤트 발행
+orchestrator = Orchestrator(..., observer=StructlogObserver())
+# 또는 소비자 리포에서 만든 LangfuseOrchestrationObserver(trace_id=...)
+```
+
+두 층을 Langfuse에서 같은 trace로 묶고 싶다면 **trace_id**를 공유하면 된다:
+- LiteLLM은 `metadata={"trace_id": ...}`를 통해 외부 trace에 붙일 수 있고,
+- Observer 구현체는 같은 `trace_id`를 이벤트 metadata로 태깅한다.
+
+### 왜 library가 Langfuse SDK를 의존하지 않는가
+
+1. **중복 책임 회피** — LLM 호출 trace는 LiteLLM이 이미 잘 해결했다. library가 또 다른 경로로 prompt/completion을 수집하면 두 trace가 어긋나거나 중복된다.
+2. **의존성 경계** — library의 runtime deps는 `pydantic` + `structlog`만 허용(04_open_questions K5 원칙). Langfuse SDK를 받으면 이 특권 상자가 열린다.
+3. **Observer 프로토콜의 순수성** — `NullObserver`, `CollectingObserver`, `StructlogObserver`, `CompositeObserver` 4종이 "library가 책임지는 observability의 전부". 소비자가 Langfuse 계정/프로젝트/키를 가진 상태에서 orchestration-level trace를 Langfuse로 보내고 싶으면 **자신의 리포에서** `LangfuseOrchestrationObserver`를 구현하여 `Observer` 프로토콜을 만족시키면 된다 — library는 이 훅 지점만 제공한다.
+
+### 지금 결정된 것 / 하지 않는 것
+
+- **하지 않음**: library에 `LangfuseObserver` 어댑터 추가, `pyproject.toml`의 `[langfuse]` optional extra (2026-04-15 제거됨).
+- **함**: canonical event 이름(`EVENT_NAMES`) 유지, metadata dict 자유 전달 허용(trace_id 등 소비자 맥락 주입용).
+- **원칙 출처**: 2026-04-15 세션 0002에서 사용자(Youngsuk)가 "LiteLLM 뒷단 Langfuse"를 선호하는 것으로 확정. `04_open_questions.md` K4의 OBSOLETE 처리 근거.
+
+---
+
+## 3. (미정) 다른 레퍼런스 패턴
 
 소비자 리포들이 실제로 돌기 시작하면 이 섹션에 축적한다. 후보:
 

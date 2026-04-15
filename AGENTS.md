@@ -111,7 +111,6 @@ minyoung-mah/
   - `run_loop` 설계 확정 (currently `NotImplementedError`)
   - `QueueObserver` — streaming 이벤트를 `asyncio.Queue`로 forward (Deep Insight 패턴 참고)
   - `Orchestrator.max_iterations` 하드 스톱 추가 (ProgressGuard와 직교하는 총 실행 횟수 상한)
-  - Langfuse observer 실제 구현
   - 소비자 리포에서 gap이 관찰될 때만 착수. library 경계에 부합하는지 먼저 점검.
 
 ## 5책임 철학 (라이브러리 경계의 기준)
@@ -122,7 +121,7 @@ minyoung-mah/
 2. **Detection** — 장애·정체·반복 감지 (ProgressGuard, Watchdog)
 3. **Clarity** — 관찰 가능한 로그와 trace
 4. **Context** — SubAgent 간 context 전달 규칙
-5. **Observation** — Langfuse 통합, timing 계측
+5. **Observation** — canonical event vocabulary + observer hook 지점 (LLM-level trace는 소비자가 LiteLLM 뒷단 Langfuse로 구성; 자세한 분할은 `docs/design/05_reference_topologies.md` §2)
 
 이 철학에 어긋나는 것을 라이브러리에 추가하려면 **반드시 정당화 근거**가 필요합니다. 더 자세한 맥락은 `docs/origin/session-2026-04-12-0005.md`(8차 세션) 참조.
 
