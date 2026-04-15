@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -32,7 +32,7 @@ async def test_collecting_observer_records_events() -> None:
     obs = CollectingObserver()
     event = ObserverEvent(
         name="orchestrator.run.start",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         metadata={"run_id": "abc"},
     )
     await obs.emit(event)

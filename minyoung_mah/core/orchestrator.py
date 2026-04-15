@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel
@@ -618,7 +618,7 @@ class Orchestrator:
             await self.observer.emit(
                 ObserverEvent(
                     name=name,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     role=role,
                     tool=tool,
                     ok=ok,

@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable
 
 from pydantic import BaseModel, ValidationError
@@ -240,7 +240,7 @@ class ToolInvocationEngine:
             await self._observer.emit(
                 ObserverEvent(
                     name=name,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     tool=tool,
                     ok=ok,
                     duration_ms=duration_ms,

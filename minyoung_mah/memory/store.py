@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -131,7 +131,7 @@ class SqliteMemoryStore:
         import json
 
         scope_s = scope or ""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         meta_s = json.dumps(metadata or {})
         async with self._lock:
             await asyncio.to_thread(
