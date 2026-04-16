@@ -64,6 +64,16 @@ minyoung-mah/
 
 사용자와의 모든 소통은 항상 한국어로 진행합니다. 코드 주석은 영어를 기본으로 하되, 사용자 facing 메시지(에러, 진행, 문서)는 한국어를 사용합니다.
 
+## Memory Sync
+
+사용자는 여러 머신(사내 VDI + 집 WSL2)에서 이 리포를 작업하므로, Claude의 장기 기억은 **별도 private GitHub repo**(`~/.claude/global-memory/`, GitHub: `youngs75/claude-global-memory`)로 동기화됩니다. 마스터 규칙은 `~/.claude/CLAUDE.md`에 있습니다.
+
+- **본 프로젝트의 글로벌 메모리 파일:** `~/.claude/global-memory/minyoung-mah.md`
+- **세션 시작 시:** 위 파일을 읽고(필요 시 `cd ~/.claude/global-memory && git pull --rebase -q` 선행) 장기 궤적과 규칙을 적용
+- **장기 기억 승격:** 프로젝트 로컬 auto memory(`~/.claude/projects/.../memory/`)는 scratch로만 사용. 다른 머신에서도 필요한 것, 프로젝트 철학·방향·경계, 여러 세션에 걸쳐 재사용된 교훈은 즉시 `minyoung-mah.md`로 승격
+- **세션 종료 또는 `sync memory` 지시 시:** `cd ~/.claude/global-memory && git add -A && git commit -m "..." && git push`
+- **금지:** 프로젝트 로컬 auto memory에만 중요한 장기 기억을 남기지 말 것 — 다른 머신에서 유실됩니다
+
 ## 세션 파일 명명 규칙
 
 세션 파일은 `.ai/sessions/session-YYYY-MM-DD-NNNN.md` 형식을 사용합니다.
