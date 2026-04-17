@@ -20,6 +20,7 @@ from minyoung_mah import (
     RoleInvocationResult,
     RoleStatus,
     StaticPipeline,
+    ToolResult,
 )
 
 from .conftest import FakeChatModel, build_orchestrator, make_role
@@ -210,6 +211,44 @@ def test_role_result_format_for_llm_marks_incomplete_with_banner() -> None:
     assert "iterations=10" in out
     assert "error=exceeded max_iterations=10" in out
     assert "회의록 2건만 찾음" in out
+
+
+def test_role_result_format_for_llm_surfaces_tool_results_when_output_none() -> None:
+    """INCOMPLETE with output=None but successful tool_results should
+    surface the tool data instead of '(no output)'."""
+    r = RoleInvocationResult(
+        role_name="legal_lookup",
+        status=RoleStatus.INCOMPLETE,
+        output=None,
+        iterations=10,
+        error="exceeded max_iterations=10",
+        tool_results=[
+            ToolResult(ok=False, value=None, error="search failed"),
+            ToolResult(ok=True, value={"law": "공동주택관리법", "article": "제30조"}),
+            ToolResult(ok=True, value={"law": "공동주택관리법", "article": "제31조"}),
+        ],
+    )
+    out = r.format_for_llm()
+    assert "status=INCOMPLETE" in out
+    assert "제30조" in out
+    assert "제31조" in out
+    assert "(no output)" not in out
+
+
+def test_role_result_format_for_llm_no_output_when_all_tools_failed() -> None:
+    """INCOMPLETE with no successful tool_results should still show '(no output)'."""
+    r = RoleInvocationResult(
+        role_name="legal_lookup",
+        status=RoleStatus.INCOMPLETE,
+        output=None,
+        iterations=10,
+        error="exceeded max_iterations=10",
+        tool_results=[
+            ToolResult(ok=False, value=None, error="search failed"),
+        ],
+    )
+    out = r.format_for_llm()
+    assert "(no output)" in out
 
 
 def test_role_result_format_for_llm_skips_incomplete_when_opted_out() -> None:

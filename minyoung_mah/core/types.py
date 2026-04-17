@@ -157,23 +157,55 @@ class RoleInvocationResult:
                 return str(value)
         return str(value)
 
+    def _successful_tool_results_text(self) -> str:
+        """Serialize successful tool results as a fallback body.
+
+        When a role exhausts ``max_iterations`` without producing a final
+        text output, the successful tool results are still valuable data
+        that downstream roles (e.g. synthesizer) should be able to use.
+        """
+        successful = [r for r in self.tool_results if r.ok and r.value is not None]
+        if not successful:
+            return ""
+        parts: list[str] = []
+        for r in successful:
+            if isinstance(r.value, str):
+                parts.append(r.value)
+            elif isinstance(r.value, BaseModel):
+                parts.append(r.value.model_dump_json())
+            elif isinstance(r.value, dict):
+                try:
+                    parts.append(json.dumps(r.value, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    parts.append(str(r.value))
+            else:
+                parts.append(str(r.value))
+        return "\n---\n".join(parts)
+
     def format_for_llm(self, *, include_incomplete: bool = True) -> str:
         """Return a labeled block suitable for inclusion in a downstream prompt.
 
         Shape::
 
             [role=<name> status=<STATUS> iterations=<N>]
-            <output_text or '(no output)'>
+            <output_text or tool results or '(no output)'>
 
         If the role is not usable (``INCOMPLETE``/``FAILED``/``ABORTED``) and
         ``include_incomplete=False``, returns an empty string. The default
         ``True`` surfaces partial results with their status banner so the
         downstream LLM can treat them as suspect rather than silently
         trusting them (the apt-legal scenario-3 hallucination trap).
+
+        When a role is ``INCOMPLETE`` with no final LLM output but has
+        successful tool results, those results are surfaced as the body
+        so downstream consumers can work with the data that *was*
+        collected.
         """
         if not self.has_usable_output and not include_incomplete:
             return ""
-        body = self.output_text() or "(no output)"
+        body = self.output_text()
+        if not body:
+            body = self._successful_tool_results_text() or "(no output)"
         header = (
             f"[role={self.role_name} status={self.status.name} "
             f"iterations={self.iterations}]"
