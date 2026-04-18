@@ -42,6 +42,7 @@ class FakeChatModel:
 
     responses: list[AIMessage] = field(default_factory=list)
     structured_responses: list[BaseModel] = field(default_factory=list)
+    structured_raw_messages: list[AIMessage] = field(default_factory=list)
     bind_tools_used: bool = False
     bound_tool_defs: list[Any] = field(default_factory=list)
 
@@ -55,19 +56,34 @@ class FakeChatModel:
         self.bound_tool_defs = list(tool_defs)
         return self
 
-    def with_structured_output(self, schema: type[BaseModel]) -> "_StructuredModel":
-        return _StructuredModel(self, schema)
+    def with_structured_output(
+        self, schema: type[BaseModel], *, include_raw: bool = False
+    ) -> "_StructuredModel":
+        return _StructuredModel(self, schema, include_raw=include_raw)
 
 
 class _StructuredModel:
-    def __init__(self, parent: FakeChatModel, schema: type[BaseModel]) -> None:
+    def __init__(
+        self, parent: FakeChatModel, schema: type[BaseModel], *, include_raw: bool = False
+    ) -> None:
         self._parent = parent
         self._schema = schema
+        self._include_raw = include_raw
 
-    async def ainvoke(self, messages: list[Any]) -> BaseModel:  # noqa: ARG002
+    async def ainvoke(self, messages: list[Any]) -> BaseModel | dict[str, Any]:  # noqa: ARG002
         if not self._parent.structured_responses:
             raise RuntimeError("FakeChatModel has no structured responses queued")
-        return self._parent.structured_responses.pop(0)
+        parsed = self._parent.structured_responses.pop(0)
+        if self._include_raw:
+            # Orchestrator 가 raw 에서 usage_metadata 를 읽으므로 structured_raw_messages 에서
+            # 꺼내고, 없으면 usage 없는 AIMessage 하나를 생성.
+            raw = (
+                self._parent.structured_raw_messages.pop(0)
+                if self._parent.structured_raw_messages
+                else AIMessage(content="")
+            )
+            return {"raw": raw, "parsed": parsed, "parsing_error": None}
+        return parsed
 
 
 # ---------------------------------------------------------------------------

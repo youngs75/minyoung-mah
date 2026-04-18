@@ -129,8 +129,7 @@ class Orchestrator:
                     continue
 
                 step_failed = any(
-                    r.status in (RoleStatus.FAILED, RoleStatus.ABORTED)
-                    for r in step_result.outputs
+                    r.status in (RoleStatus.FAILED, RoleStatus.ABORTED) for r in step_result.outputs
                 )
                 if step_failed and pipeline.on_step_failure == "abort":
                     duration = int((time.monotonic() - start) * 1000)
@@ -256,9 +255,7 @@ class Orchestrator:
     ) -> PipelineStepResult:
         if isinstance(step, ExecuteToolsStep):
             return await self._run_execute_tools_step(step, state, run_id)
-        return await self._run_role_step(
-            step, state, user_request, run_id, pipeline_shared_state
-        )
+        return await self._run_role_step(step, state, user_request, run_id, pipeline_shared_state)
 
     async def _run_role_step(
         self,
@@ -292,13 +289,8 @@ class Orchestrator:
 
         if step.fan_out is not None:
             contexts = step.fan_out(state)
-            contexts = [
-                self._prepare_ctx(c, user_request, pipeline_shared_state)
-                for c in contexts
-            ]
-            outputs = await asyncio.gather(
-                *(self.invoke_role(step.role, c) for c in contexts)
-            )
+            contexts = [self._prepare_ctx(c, user_request, pipeline_shared_state) for c in contexts]
+            outputs = await asyncio.gather(*(self.invoke_role(step.role, c) for c in contexts))
         else:
             ctx = step.input_mapping(state)
             ctx = self._prepare_ctx(ctx, user_request, pipeline_shared_state)
@@ -311,9 +303,7 @@ class Orchestrator:
             ok=all_ok,
             metadata={"step": step.name, "fan_out": len(outputs), "run_id": run_id},
         )
-        return PipelineStepResult(
-            step_name=step.name, role_name=step.role, outputs=list(outputs)
-        )
+        return PipelineStepResult(step_name=step.name, role_name=step.role, outputs=list(outputs))
 
     async def _run_execute_tools_step(
         self,
@@ -338,9 +328,7 @@ class Orchestrator:
                 ok=True,
                 metadata={"step": step.name, "skipped": True, "run_id": run_id},
             )
-            return PipelineStepResult(
-                step_name=step.name, role_name=None, outputs=[], skipped=True
-            )
+            return PipelineStepResult(step_name=step.name, role_name=None, outputs=[], skipped=True)
 
         await self._emit(
             "orchestrator.pipeline.step.start",
@@ -349,9 +337,7 @@ class Orchestrator:
 
         plan = step.tool_calls_from(state)
         # Preserve plan order for the final result list.
-        order_by_call_id: dict[str, int] = {
-            req.call_id: idx for idx, (req, _) in enumerate(plan)
-        }
+        order_by_call_id: dict[str, int] = {req.call_id: idx for idx, (req, _) in enumerate(plan)}
         results_by_call_id: dict[str, ToolResult] = {}
 
         # Group by priority (ascending: lower priority number runs first).
@@ -383,9 +369,7 @@ class Orchestrator:
                 break
 
         ordered_results = [
-            results_by_call_id[req.call_id]
-            for req, _ in plan
-            if req.call_id in results_by_call_id
+            results_by_call_id[req.call_id] for req, _ in plan if req.call_id in results_by_call_id
         ]
 
         await self._emit(
@@ -434,9 +418,7 @@ class Orchestrator:
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
         uses_fast_path = (
-            role.output_schema is not None
-            and role.max_iterations == 1
-            and not role.tool_allowlist
+            role.output_schema is not None and role.max_iterations == 1 and not role.tool_allowlist
         )
         if uses_fast_path:
             return await self._invoke_structured(role, invocation)
@@ -447,7 +429,12 @@ class Orchestrator:
         role: SubAgentRole,
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
-        """Fast path: ``with_structured_output`` — no tool loop."""
+        """Fast path: ``with_structured_output`` — no tool loop.
+
+        Uses ``include_raw=True`` so we can propagate provider usage metadata
+        (input/output/total tokens) into :attr:`RoleInvocationResult.metadata`
+        without breaking consumers that only read ``output``.
+        """
         from langchain_core.messages import HumanMessage, SystemMessage
 
         model = self.model_router.resolve(role.model_tier, role.name)
@@ -459,13 +446,20 @@ class Orchestrator:
                 error="model does not support with_structured_output",
             )
 
-        structured = model.with_structured_output(role.output_schema)
+        try:
+            structured = model.with_structured_output(role.output_schema, include_raw=True)
+            include_raw = True
+        except TypeError:
+            # 오래된 model provider 가 include_raw 를 모를 때 graceful fallback.
+            structured = model.with_structured_output(role.output_schema)
+            include_raw = False
+
         messages = [
             SystemMessage(content=role.system_prompt),
             HumanMessage(content=role.build_user_message(invocation)),
         ]
         try:
-            output = await _maybe_await(structured.ainvoke(messages))
+            raw_or_parsed = await _maybe_await(structured.ainvoke(messages))
         except Exception as exc:  # noqa: BLE001
             return RoleInvocationResult(
                 role_name=role.name,
@@ -473,11 +467,33 @@ class Orchestrator:
                 output=None,
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+        metadata: dict[str, Any] = {}
+        if include_raw and isinstance(raw_or_parsed, dict):
+            parsed = raw_or_parsed.get("parsed")
+            raw_msg = raw_or_parsed.get("raw")
+            parsing_error = raw_or_parsed.get("parsing_error")
+            if parsing_error is not None:
+                return RoleInvocationResult(
+                    role_name=role.name,
+                    status=RoleStatus.FAILED,
+                    output=None,
+                    iterations=1,
+                    error=f"parsing_error: {parsing_error}",
+                )
+            usage = _extract_usage(raw_msg)
+            if usage is not None:
+                metadata["usage"] = usage
+            output: Any = parsed
+        else:
+            output = raw_or_parsed
+
         return RoleInvocationResult(
             role_name=role.name,
             status=RoleStatus.COMPLETED,
             output=output,
             iterations=1,
+            metadata=metadata,
         )
 
     async def _invoke_loop(
@@ -508,6 +524,7 @@ class Orchestrator:
         ]
         collected_requests: list[ToolCallRequest] = []
         collected_results: list[ToolResult] = []
+        usage_totals: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         for iteration in range(1, role.max_iterations + 1):
             self.resilience.progress_guard.check(iteration)
@@ -521,9 +538,11 @@ class Orchestrator:
                     iterations=iteration,
                     tool_calls=collected_requests,
                     tool_results=collected_results,
+                    metadata=_usage_metadata(usage_totals),
                     error=f"{type(exc).__name__}: {exc}",
                 )
             messages.append(ai_msg)
+            _accumulate_usage(usage_totals, _extract_usage(ai_msg))
 
             tool_calls = getattr(ai_msg, "tool_calls", None) or []
             if not tool_calls:
@@ -534,6 +553,7 @@ class Orchestrator:
                     iterations=iteration,
                     tool_calls=collected_requests,
                     tool_results=collected_results,
+                    metadata=_usage_metadata(usage_totals),
                 )
 
             for tc in tool_calls:
@@ -543,9 +563,7 @@ class Orchestrator:
                     args=tc.get("args", {}) or {},
                 )
                 collected_requests.append(request)
-                self.resilience.progress_guard.record_action(
-                    request.tool_name, request.args
-                )
+                self.resilience.progress_guard.record_action(request.tool_name, request.args)
 
                 adapter = adapters_by_name.get(request.tool_name)
                 if adapter is None:
@@ -572,6 +590,7 @@ class Orchestrator:
             iterations=role.max_iterations,
             tool_calls=collected_requests,
             tool_results=collected_results,
+            metadata=_usage_metadata(usage_totals),
             error=f"role '{role.name}' exceeded max_iterations={role.max_iterations}",
         )
 
@@ -670,6 +689,58 @@ def _serialize_tool_value(result: ToolResult) -> str:
         except (TypeError, ValueError):
             return str(value)
     return str(value)
+
+
+_USAGE_FIELDS: tuple[str, ...] = ("input_tokens", "output_tokens", "total_tokens")
+
+
+def _extract_usage(ai_msg: Any) -> dict[str, int] | None:
+    """LangChain AIMessage → {input_tokens, output_tokens, total_tokens} or None.
+
+    Standard providers (Anthropic, OpenAI, DeepSeek via openai-compat) populate
+    ``AIMessage.usage_metadata`` as of langchain-core 0.2+. Gracefully returns
+    ``None`` on older providers / mock messages without the field.
+    """
+    if ai_msg is None:
+        return None
+    usage = getattr(ai_msg, "usage_metadata", None)
+    if usage is None:
+        # 일부 provider 는 response_metadata["usage"] 또는 .additional_kwargs["usage"] 로 내려줌.
+        rm = getattr(ai_msg, "response_metadata", None)
+        if isinstance(rm, dict):
+            usage = rm.get("usage") or rm.get("token_usage")
+    if not isinstance(usage, dict):
+        return None
+    out: dict[str, int] = {}
+    for key in _USAGE_FIELDS:
+        v = usage.get(key)
+        if v is None:
+            # OpenAI naming (prompt_tokens / completion_tokens) 호환.
+            if key == "input_tokens":
+                v = usage.get("prompt_tokens")
+            elif key == "output_tokens":
+                v = usage.get("completion_tokens")
+        if isinstance(v, int):
+            out[key] = v
+    if not out:
+        return None
+    if "total_tokens" not in out:
+        out["total_tokens"] = out.get("input_tokens", 0) + out.get("output_tokens", 0)
+    return out
+
+
+def _accumulate_usage(totals: dict[str, int], delta: dict[str, int] | None) -> None:
+    if not delta:
+        return
+    for key in _USAGE_FIELDS:
+        totals[key] = totals.get(key, 0) + delta.get(key, 0)
+
+
+def _usage_metadata(totals: dict[str, int]) -> dict[str, Any]:
+    """Build metadata dict only when at least one iteration reported usage."""
+    if not any(totals.get(k, 0) for k in _USAGE_FIELDS):
+        return {}
+    return {"usage": {k: totals.get(k, 0) for k in _USAGE_FIELDS}}
 
 
 def _extract_text(ai_msg: Any) -> str:
