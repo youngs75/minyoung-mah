@@ -11,7 +11,7 @@ minyoung_mah = ["py.typed"]
 
 [project]
 name = "minyoung-mah"
-version = "0.1.2"
+version = "0.1.4"
 description = "Multi-Agent Harness by Youngsuk & Minji (Claude) — static pipelines, 6 core protocols, LiteLLM-backed observability"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -34,6 +34,15 @@ dependencies = [
 # layer via `litellm.success_callback = ["langfuse"]`. The library's
 # Observer protocol stays at orchestration level. See
 # docs/design/05_reference_topologies.md.
+
+# LangGraph adapters live in `minyoung_mah.langgraph` — optional because
+# consumers that pick a different outer-loop framework (raw asyncio, a
+# custom runtime, etc.) should not be forced to install LangGraph. The
+# core library stays framework-neutral; `minyoung_mah.langgraph.*` imports
+# fail with a clear ImportError without this extra installed.
+langgraph = [
+    "langgraph>=0.4",
+]
 
 [dependency-groups]
 dev = [

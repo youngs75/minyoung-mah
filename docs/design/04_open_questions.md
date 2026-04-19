@@ -350,10 +350,10 @@ default_resilience(
 
 - `orchestrator.run.start` / `.end`
 - `orchestrator.role.invoke.start` / `.end`
-- `orchestrator.tool.call.start` / `.end`
+- `role.tool.call.start` / `.end` (0.1.4 rename — tool-level events live under the role namespace)
 - `orchestrator.hitl.ask` / `.respond`
 - `orchestrator.memory.read` / `.write`
-- `orchestrator.resilience.retry` / `.escalate`
+- `role.resilience.retry` / `orchestrator.resilience.escalate`
 
 각 이벤트는 `{timestamp, event, role, tool, duration_ms, ok, metadata}` 공통 필드. Langfuse adapter는 이걸 span으로 변환, structlog adapter는 log entry로 변환.
 

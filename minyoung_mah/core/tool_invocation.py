@@ -128,7 +128,7 @@ class ToolInvocationEngine:
 
         for attempt in range(1, self._retry.max_attempts + 1):
             await self._emit(
-                "orchestrator.tool.call.start",
+                "role.tool.call.start",
                 tool=adapter.name,
                 metadata={"attempt": attempt, "call_id": request.call_id},
             )
@@ -157,7 +157,7 @@ class ToolInvocationEngine:
                 )
 
             await self._emit(
-                "orchestrator.tool.call.end",
+                "role.tool.call.end",
                 tool=adapter.name,
                 ok=result.ok,
                 duration_ms=result.duration_ms,
@@ -181,7 +181,7 @@ class ToolInvocationEngine:
                 return result
 
             await self._emit(
-                "orchestrator.resilience.retry",
+                "role.resilience.retry",
                 tool=adapter.name,
                 metadata={
                     "attempt": attempt,

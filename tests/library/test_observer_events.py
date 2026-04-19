@@ -16,15 +16,19 @@ def test_canonical_event_names_cover_required_boundaries() -> None:
         "orchestrator.run.end",
         "orchestrator.role.invoke.start",
         "orchestrator.role.invoke.end",
-        "orchestrator.tool.call.start",
-        "orchestrator.tool.call.end",
+        "role.tool.call.start",
+        "role.tool.call.end",
     }
     assert required.issubset(EVENT_NAMES)
 
 
 def test_is_canonical() -> None:
-    assert is_canonical("orchestrator.tool.call.start")
+    assert is_canonical("role.tool.call.start")
+    assert is_canonical("orchestrator.role.invoke.start")
     assert not is_canonical("orchestrator.nonsense")
+    # Legacy name must not silently pass — callers migrating from 0.1.3 need
+    # a loud failure, not a quiet one.
+    assert not is_canonical("orchestrator.tool.call.start")
 
 
 @pytest.mark.asyncio

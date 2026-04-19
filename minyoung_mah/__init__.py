@@ -45,7 +45,14 @@ from .core import (
     UnknownRoleError,
     UnknownToolError,
 )
-from .hitl import NullHITLChannel, QueueHITLChannel, TerminalHITLChannel
+from .hitl import (
+    HITL_INTERRUPT_MARKER,
+    NullHITLChannel,
+    QueueHITLChannel,
+    TerminalHITLChannel,
+    extract_interrupt_payload,
+    make_interrupt_marker,
+)
 from .memory.store import NullMemoryStore, SqliteMemoryStore
 from .model import SingleModelRouter, TieredModelRouter
 from .observer import (
@@ -55,8 +62,9 @@ from .observer import (
     StructlogObserver,
 )
 from .resilience.policy import ResiliencePolicy, default_resilience
+from .skills import Skill, SkillStore, parse_frontmatter, render_skill_block
 
-__version__ = "0.1.0"
+__version__ = "0.1.4"
 
 __all__ = [
     "CollectingObserver",
@@ -68,6 +76,7 @@ __all__ = [
     "HITLChannel",
     "HITLEvent",
     "HITLResponse",
+    "HITL_INTERRUPT_MARKER",
     "InvocationContext",
     "MemoryEntry",
     "MemoryExtractor",
@@ -90,6 +99,8 @@ __all__ = [
     "RoleRegistry",
     "RoleStatus",
     "SingleModelRouter",
+    "Skill",
+    "SkillStore",
     "SqliteMemoryStore",
     "StaticPipeline",
     "StructlogObserver",
@@ -106,4 +117,8 @@ __all__ = [
     "UnknownToolError",
     "__version__",
     "default_resilience",
+    "extract_interrupt_payload",
+    "make_interrupt_marker",
+    "parse_frontmatter",
+    "render_skill_block",
 ]

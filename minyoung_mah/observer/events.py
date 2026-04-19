@@ -31,13 +31,20 @@ EVENT_NAMES: frozenset[str] = frozenset(
         "orchestrator.pipeline.step.end",
         "orchestrator.role.invoke.start",
         "orchestrator.role.invoke.end",
-        "orchestrator.tool.call.start",
-        "orchestrator.tool.call.end",
+        # Tool-level events fire from inside a role invocation (the library's
+        # ToolInvocationEngine is shared across every role — planner, coder,
+        # verifier, etc). Name them ``role.*`` so they are not mistaken for
+        # actions of a hypothetical top-level orchestrator. The *role*
+        # itself is identified via the enclosing ``orchestrator.role.invoke``
+        # span, not a field on each tool-call event (the engine intentionally
+        # stays role-agnostic).
+        "role.tool.call.start",
+        "role.tool.call.end",
+        "role.resilience.retry",
         "orchestrator.hitl.ask",
         "orchestrator.hitl.respond",
         "orchestrator.memory.read",
         "orchestrator.memory.write",
-        "orchestrator.resilience.retry",
         "orchestrator.resilience.escalate",
     }
 )

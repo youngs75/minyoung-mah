@@ -84,17 +84,18 @@ PipelineState = dict[step_name → PipelineStepResult]
 
 ## 5. Canonical Observer Events
 
-`minyoung_mah/observer/events.py::EVENT_NAMES`에 동결되어 있는 어휘. 스키마는 `orchestrator.<subject>.<action>`.
+`minyoung_mah/observer/events.py::EVENT_NAMES`에 동결되어 있는 어휘. 스키마는 `<namespace>.<subject>.<action>`. 네임스페이스 두 개: `orchestrator.*` 는 Orchestrator 자신의 행동, `role.*` 은 현재 invoke 된 role 안에서 ToolInvocationEngine 이 내는 tool-level 이벤트.
 
 | 이벤트 | 언제 |
 |---|---|
 | `orchestrator.run.start` / `.end` | `run_pipeline` 시작/종료 |
 | `orchestrator.pipeline.step.start` / `.end` | 각 step 진입/종료 (skipped/fan_out 메타 포함) |
-| `orchestrator.role.invoke.start` / `.end` | 개별 `invoke_role` 경계 |
-| `orchestrator.tool.call.start` / `.end` | `ToolInvocationEngine`이 발행 |
+| `orchestrator.role.invoke.start` / `.end` | 개별 `invoke_role` 경계 — 어떤 role 인지는 이 span 에서만 드러납니다 |
+| `role.tool.call.start` / `.end` | `ToolInvocationEngine`이 발행 (0.1.4 에서 `orchestrator.tool.call.*` 로부터 리네임) |
 | `orchestrator.hitl.ask` / `.respond` | HITL 경계 |
 | `orchestrator.memory.read` / `.write` | 메모리 경계 |
-| `orchestrator.resilience.retry` / `.escalate` | tool-level retry, resilience escalation |
+| `role.resilience.retry` | tool-level retry (0.1.4 리네임) |
+| `orchestrator.resilience.escalate` | resilience escalation |
 
 Payload는 공통 필드(`role`, `tool`, `duration_ms`, `ok`) + 자유 형식 `metadata`. 직렬화 가능해야 합니다.
 

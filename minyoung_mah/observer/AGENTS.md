@@ -16,11 +16,16 @@
 orchestrator.run.start                 orchestrator.run.end
 orchestrator.pipeline.step.start       orchestrator.pipeline.step.end
 orchestrator.role.invoke.start         orchestrator.role.invoke.end
-orchestrator.tool.call.start           orchestrator.tool.call.end
+role.tool.call.start                   role.tool.call.end
+role.resilience.retry
 orchestrator.hitl.ask                  orchestrator.hitl.respond
 orchestrator.memory.read               orchestrator.memory.write
-orchestrator.resilience.retry          orchestrator.resilience.escalate
+orchestrator.resilience.escalate
 ```
+
+## 두 네임스페이스: `orchestrator.*` vs `role.*`
+
+`orchestrator.*` 는 **Orchestrator 자신의 행동** — 파이프라인 step, role 을 invoke 한 경계, HITL 중재, 메모리 접근 등. `role.*` 은 **role 이 현재 소유한 ToolInvocationEngine 이 부르는 tool 수준 이벤트** — 어떤 role 인지는 둘러싼 `orchestrator.role.invoke` span 으로 식별합니다. `ToolInvocationEngine` 은 의도적으로 role-agnostic (`The engine does not know about LLMs or roles`) 이라 개별 tool-call 이벤트에 role 이름 필드를 달지 않습니다. Langfuse·OTel 소비자는 trace parent 체인으로 자연스럽게 연결됩니다.
 
 이벤트를 추가·제거할 때는:
 
