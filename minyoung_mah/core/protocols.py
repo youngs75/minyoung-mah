@@ -185,6 +185,38 @@ class MemoryStore(Protocol):
         limit: int = 5,
     ) -> list[MemoryEntry]: ...
 
+    async def list_by_scope(
+        self,
+        tier: str,
+        scope: str | None = None,
+        limit: int = 10,
+        order: str = "desc",
+    ) -> list[MemoryEntry]:
+        """List entries within ``(tier, scope)`` ordered by ``created_at``.
+        ``(tier, scope)`` 범위의 항목을 ``created_at`` 기준으로 정렬해 반환.
+
+        Unlike :meth:`search`, this does **not** consult the FTS index — it
+        returns the most recent ``limit`` entries regardless of content.
+        Intended for tiers whose useful recall is "the last N items" rather
+        than keyword-matched (e.g. ``short_term`` conversation turns where
+        the next-turn query rarely shares tokens with stored content,
+        especially across CJK/English mixes).
+
+        :meth:`search` 와 달리 FTS 인덱스를 **참조하지 않는다** — 내용과 무관하게
+        가장 최근 ``limit`` 개 항목을 돌려준다. 유효 회수가 "가장 최근 N 개"인
+        tier 에 적합하다(예: ``short_term`` 대화 turn 처럼 다음 turn 쿼리가
+        저장 내용과 토큰이 겹치지 않는 경우. 특히 CJK/영문 혼재 환경).
+
+        ``scope=None`` means "all scopes in this tier". ``order`` is
+        ``"desc"`` (default, newest first) or ``"asc"``. Implementations must
+        validate ``order`` and raise on other values.
+
+        ``scope=None`` 은 "이 tier 의 모든 scope"를 의미한다. ``order`` 는
+        ``"desc"``(기본값, 최신순) 또는 ``"asc"``. 구현체는 ``order`` 를
+        검증하고 다른 값에 대해서는 예외를 던져야 한다.
+        """
+        ...
+
     async def list_tiers(self) -> list[str]: ...
 
 

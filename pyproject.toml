@@ -11,7 +11,7 @@ minyoung_mah = ["py.typed"]
 
 [project]
 name = "minyoung-mah"
-version = "0.1.5"
+version = "0.1.6"
 description = "Multi-Agent Harness by Youngsuk & Minji (Claude) — static pipelines, 6 core protocols, LiteLLM-backed observability"
 readme = "README.md"
 requires-python = ">=3.12"

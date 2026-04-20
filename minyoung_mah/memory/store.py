@@ -227,6 +227,38 @@ class SqliteMemoryStore:
         )
         return [_row_to_entry(r) for r in rows]
 
+    async def list_by_scope(
+        self,
+        tier: str,
+        scope: str | None = None,
+        limit: int = 10,
+        order: str = "desc",
+    ) -> list[MemoryEntry]:
+        """Recent-first (or ascending) list of entries within ``(tier, scope)``.
+        ``(tier, scope)`` 범위 항목을 최근순(또는 오름차순)으로 반환.
+
+        Bypasses the FTS index entirely. ``id`` is used as a deterministic
+        tie-breaker when ``created_at`` ties (back-to-back writes within the
+        same ISO second).
+
+        FTS 인덱스를 통하지 않는다. ``created_at`` 이 동률일 때(같은 ISO 초
+        안의 연속 write) ``id`` 를 결정론적 tie-breaker 로 사용한다.
+        """
+        if order not in ("asc", "desc"):
+            raise ValueError(f"order must be 'asc' or 'desc', got {order!r}")
+        direction = order.upper()
+        sql = "SELECT * FROM memories WHERE tier = ?"
+        params: list[Any] = [tier]
+        if scope is not None:
+            sql += " AND scope = ?"
+            params.append(scope)
+        sql += f" ORDER BY created_at {direction}, id {direction} LIMIT ?"
+        params.append(limit)
+        rows = await asyncio.to_thread(
+            lambda: self._conn.execute(sql, params).fetchall()
+        )
+        return [_row_to_entry(r) for r in rows]
+
     async def list_tiers(self) -> list[str]:
         if self._declared_tiers is not None:
             return list(self._declared_tiers)
@@ -264,6 +296,9 @@ class NullMemoryStore:
         return None
 
     async def search(self, *args: Any, **kwargs: Any) -> list[MemoryEntry]:  # noqa: ARG002
+        return []
+
+    async def list_by_scope(self, *args: Any, **kwargs: Any) -> list[MemoryEntry]:  # noqa: ARG002
         return []
 
     async def list_tiers(self) -> list[str]:
