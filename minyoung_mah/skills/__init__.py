@@ -1,21 +1,34 @@
 """Skill loader — static injection of procedural knowledge into SubAgent runs.
+스킬 로더 — SubAgent 실행에 절차적 지식을 정적으로 주입.
 
 Skills separate **procedure** from **identity**. The role system prompt stays
 an identity contract ("you are a verifier") while edit-friendly SKILL.md files
 hold the how-to steps. Consumers choose the injection policy — the library
 only provides the loader + a renderer.
 
-## Phase 1 — static injection
+스킬은 **절차**와 **정체성**을 분리한다. role system prompt 는 "당신은 검증자다"
+같은 정체성 계약으로 두고, 편집하기 쉬운 SKILL.md 파일에 how-to 단계를 둔다.
+주입 정책은 컨슈머가 결정 — 라이브러리는 로더와 렌더러만 제공한다.
+
+## Phase 1 — static injection / 정적 주입
 
 At role build time the consumer calls ``SkillStore(root).for_role(name)`` and
 attaches the returned tuple to the role. ``render_skill_block(skills)`` is then
 appended to every invocation's user message.
 
+역할 구성 시점에 컨슈머가 ``SkillStore(root).for_role(name)`` 을 호출해 반환
+튜플을 역할에 붙인다. 그 다음 ``render_skill_block(skills)`` 의 결과가 매
+호출의 user message 에 덧붙는다.
+
 The loader intentionally distinguishes ``summary`` and ``body`` so Phase 2
 (progressive disclosure — summary only in prompt, body loaded on demand via a
 ``load_skill`` tool) can reuse the same data shape.
 
-## Consumer usage
+로더는 ``summary`` 와 ``body`` 를 의도적으로 분리한다. Phase 2(점진적 공개 —
+프롬프트에는 summary 만, body 는 ``load_skill`` 도구로 on-demand 로딩)가
+같은 데이터 형태를 재사용할 수 있도록.
+
+## Consumer usage / 컨슈머 사용법
 
     from minyoung_mah import SkillStore, render_skill_block
 
@@ -26,6 +39,10 @@ The loader intentionally distinguishes ``summary`` and ``body`` so Phase 2
 The library does **not** expose a module-level singleton — the root path is
 consumer-specific and binding it here would leak one app's filesystem layout
 into library state.
+
+라이브러리는 module-level 싱글톤을 **노출하지 않는다** — root 경로는 컨슈머
+특화이며, 여기에 묶어두면 한 앱의 파일시스템 배치가 라이브러리 상태로
+누설되기 때문이다.
 """
 
 from __future__ import annotations
@@ -45,16 +62,23 @@ class Skill:
 
 def parse_frontmatter(raw: str) -> dict[str, object]:
     """Minimal ``key: value`` parser for the SKILL.md frontmatter subset.
+    SKILL.md frontmatter 부분집합을 위한 미니멀 ``key: value`` 파서.
 
     Supported forms::
+    지원 형태::
 
         key: scalar
-        key: [a, b, c]   # flow-style list on a single line
+        key: [a, b, c]   # flow-style list on a single line / 한 줄 flow-style 리스트
 
     A full YAML dependency is avoided deliberately — the frontmatter schema is
     tiny and fixed, and pulling pyyaml into the library for three keys would
     be a bad trade. Consumers that want richer metadata can subclass
     :class:`SkillStore` and override ``_parse_skill``.
+
+    완전한 YAML 의존성은 의도적으로 피한다 — frontmatter 스키마는 작고 고정이며,
+    키 3개를 위해 pyyaml 을 라이브러리에 끌어들이는 건 나쁜 트레이드오프. 더
+    풍부한 메타데이터가 필요한 컨슈머는 :class:`SkillStore` 를 서브클래싱해
+    ``_parse_skill`` 을 오버라이드하면 된다.
     """
     meta: dict[str, object] = {}
     for line in raw.splitlines():
@@ -98,10 +122,14 @@ def _parse_skill(path: Path) -> Skill:
 
 class SkillStore:
     """Eagerly loads every ``*.md`` under ``root`` as a :class:`Skill`.
+    ``root`` 아래 모든 ``*.md`` 를 :class:`Skill` 로 즉시(eager) 로드.
 
     Bodies are kept in memory so lookups inside the hot SubAgent invocation
     path avoid disk I/O. Total size is tiny (few KB for typical projects),
     so eager load is the right trade.
+
+    body 는 메모리에 보관되어 hot SubAgent 호출 경로에서 디스크 I/O 를 피한다.
+    총 크기가 작으므로(일반 프로젝트에서 수 KB) eager load 가 적절한 트레이드오프.
     """
 
     def __init__(self, root: Path) -> None:
@@ -128,7 +156,8 @@ class SkillStore:
 
 
 def render_skill_block(skills: list[Skill]) -> str:
-    """Format skill bodies for inclusion in a SubAgent user message."""
+    """Format skill bodies for inclusion in a SubAgent user message.
+    스킬 본문들을 SubAgent user message 삽입용으로 포맷한다."""
     if not skills:
         return ""
     parts = ["## Skills (procedural playbooks)"]

@@ -1,4 +1,5 @@
-"""minyoung-mah core — protocols, types, registries, and the Orchestrator."""
+"""minyoung-mah core — protocols, types, registries, and the Orchestrator.
+minyoung-mah 코어 — 프로토콜·타입·레지스트리·Orchestrator 묶음."""
 
 from .orchestrator import Orchestrator, OrchestratorError
 from .protocols import (

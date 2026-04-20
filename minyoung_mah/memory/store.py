@@ -1,17 +1,30 @@
 """Default :class:`MemoryStore` implementations.
+:class:`MemoryStore` 기본 구현체들.
 
 Two backends ship with the library:
+
+라이브러리에 두 가지 백엔드가 함께 제공된다:
 
 - :class:`SqliteMemoryStore` — opinionated default. SQLite + FTS5 full-text
   index, ``(tier, scope, key)`` unique constraint. Tier and scope are
   application-defined strings; the library enforces no semantics on them.
+- :class:`SqliteMemoryStore` — opinionated 기본값. SQLite + FTS5 full-text
+  인덱스, ``(tier, scope, key)`` unique 제약. tier 와 scope 는 애플리케이션이
+  정의하는 문자열이며, 라이브러리는 그 의미에 대해 어떤 강제도 하지 않는다.
 - :class:`NullMemoryStore` — drops every write. Required for apps that
   cannot persist memory (e.g. apt-legal's privacy constraint).
+- :class:`NullMemoryStore` — 모든 write 를 버린다. 메모리를 영속화할 수 없는
+  앱(예: apt-legal 의 프라이버시 제약)에 필요.
 
 The schema was redesigned from the ax coding agent original: ``layer`` →
 ``tier``, ``project_id`` → ``scope``. Per decision D1 the old DB format
 is intentionally incompatible — a fresh start is simpler than a migration
 tool for the rare users who had real data in the old schema.
+
+스키마는 ax coding agent 원본에서 재설계되었다: ``layer`` → ``tier``,
+``project_id`` → ``scope``. 결정 D1 에 따라 구 DB 포맷과 의도적으로 호환되지
+않는다 — 구 스키마에 실제 데이터를 가진 드문 사용자를 위한 마이그레이션
+도구보다 fresh start 가 단순하다.
 """
 
 from __future__ import annotations
@@ -83,16 +96,22 @@ END;
 
 class SqliteMemoryStore:
     """SQLite + FTS5 backed memory store with tier/scope partitioning.
+    SQLite + FTS5 백엔드의 메모리 스토어. tier/scope 파티셔닝 지원.
 
     Parameters
     ----------
     db_path:
         Path to the SQLite database file. Parent dirs are created.
         Use ``":memory:"`` for an ephemeral store (handy in tests).
+        SQLite 파일 경로. 상위 디렉토리는 자동 생성. ``":memory:"`` 를 주면
+        ephemeral 스토어가 된다(테스트에 유용).
     tiers:
         Optional declared tier names. When set, :meth:`list_tiers` returns
         this list instead of querying the table. Writes to undeclared tiers
         are still allowed — the list is informational.
+        선택적으로 선언된 tier 이름들. 지정하면 :meth:`list_tiers` 가 테이블
+        조회 대신 이 리스트를 반환한다. 선언되지 않은 tier 에 대한 write 도
+        여전히 허용된다 — 리스트는 정보성일 뿐.
     """
 
     def __init__(self, db_path: str, tiers: list[str] | None = None) -> None:
@@ -107,7 +126,7 @@ class SqliteMemoryStore:
         self._init_schema()
         log.info("memory_store.initialized", db_path=db_path)
 
-    # -- schema --------------------------------------------------------
+    # -- schema -------------------------------------------------------- 스키마
 
     def _init_schema(self) -> None:
         cur = self._conn.cursor()
@@ -118,7 +137,7 @@ class SqliteMemoryStore:
             cur.execute(trigger_sql)
         self._conn.commit()
 
-    # -- MemoryStore protocol -----------------------------------------
+    # -- MemoryStore protocol ----------------------------------------- MemoryStore 프로토콜
 
     async def write(
         self,
@@ -229,8 +248,10 @@ class SqliteMemoryStore:
 
 class NullMemoryStore:
     """Drops every write and returns nothing on reads.
+    모든 write 를 버리고 read 에서는 아무 것도 반환하지 않는다.
 
     Used when memory persistence is forbidden (privacy, compliance).
+    메모리 영속화가 금지된 경우(프라이버시, 컴플라이언스)에 사용한다.
     """
 
     def __init__(self, tiers: list[str] | None = None) -> None:
@@ -250,7 +271,7 @@ class NullMemoryStore:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — 헬퍼
 # ---------------------------------------------------------------------------
 
 

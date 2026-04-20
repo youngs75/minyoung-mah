@@ -1,16 +1,25 @@
 """The Orchestrator — static pipeline executor.
+Orchestrator — 정적 파이프라인 실행기.
 
 Responsibilities
+책임
 ----------------
 1. **Safety**: role allowlists, watchdog timeouts, max_iterations.
+   **Safety(안전)**: 역할 allowlist, 워치독 타임아웃, max_iterations.
 2. **Detection**: progress guard hook (disabled by default in static mode).
+   **Detection(감지)**: progress guard 훅 (정적 모드에서는 기본 비활성).
 3. **Clarity**: standardized observer events on every boundary.
+   **Clarity(가시성)**: 모든 경계에서 표준화된 observer 이벤트 emit.
 4. **Context**: build role-level ``InvocationContext`` from pipeline state.
+   **Context(맥락 전달)**: pipeline state로부터 역할별 ``InvocationContext`` 구성.
 5. **Observation**: timing + ok/error on every emit.
+   **Observation(관측)**: 매 emit 마다 timing + ok/error 정보 부착.
 
 What this module is *not* responsible for: choosing which role to invoke
 next (applications declare that via :class:`StaticPipeline`), domain
 prompts, or tool implementations.
+이 모듈이 책임지지 *않는* 것: 다음에 어떤 역할을 호출할지 선택(:class:`StaticPipeline`
+으로 애플리케이션이 선언), 도메인 프롬프트, 도구 구현.
 """
 
 from __future__ import annotations
@@ -55,17 +64,25 @@ from .types import (
 
 
 class OrchestratorError(Exception):
-    """Raised when the Orchestrator cannot continue — e.g. unknown role."""
+    """Raised when the Orchestrator cannot continue — e.g. unknown role.
+    Orchestrator 가 더 진행할 수 없을 때 발생 — 예: 미등록 역할 호출."""
 
 
 class Orchestrator:
     """Composes the six core protocols to run pipelines.
+    6개 핵심 프로토콜을 조합하여 파이프라인을 실행한다.
 
     See ``docs/design/01_core_abstractions.md`` §3 for the design rationale.
     The public surface is two methods: :meth:`run_pipeline` (static DAG)
     and :meth:`invoke_role` (atomic unit). Dynamic driver-role loops are
     intentionally out of scope; applications that need a dynamic shape
     build it on top of ``invoke_role`` themselves.
+
+    설계 근거는 ``docs/design/01_core_abstractions.md`` §3 참조.
+    공개 인터페이스는 두 메서드: :meth:`run_pipeline`(정적 DAG)과
+    :meth:`invoke_role`(원자 단위). 동적 driver-role 루프는 의도적으로
+    범위 밖이며, 동적 형태가 필요한 애플리케이션은 ``invoke_role`` 위에서
+    직접 조립한다.
     """
 
     def __init__(
@@ -91,7 +108,7 @@ class Orchestrator:
         self.tool_engine = tool_engine or ToolInvocationEngine(self.observer)
 
     # ------------------------------------------------------------------
-    # Public: static pipeline
+    # Public: static pipeline — 공개: 정적 파이프라인
     # ------------------------------------------------------------------
 
     async def run_pipeline(
@@ -100,11 +117,16 @@ class Orchestrator:
         user_request: str,
     ) -> PipelineResult:
         """Execute a static DAG of roles.
+        역할들로 구성된 정적 DAG를 실행한다.
 
         Steps run in declaration order. Each step sees the accumulated
         ``PipelineState`` and builds its own ``InvocationContext`` via the
         step's ``input_mapping``. ``fan_out`` turns a step into N parallel
         invocations of the same role.
+
+        스텝은 선언 순서대로 실행. 각 스텝은 누적된 ``PipelineState``를 보고
+        자신의 ``input_mapping``으로 ``InvocationContext``를 구성한다.
+        ``fan_out``을 지정하면 동일 역할을 N개 병렬로 호출한다.
         """
         run_id = str(uuid.uuid4())
         start = time.monotonic()
@@ -181,7 +203,7 @@ class Orchestrator:
         return result
 
     # ------------------------------------------------------------------
-    # Public: atomic invocation
+    # Public: atomic invocation — 공개: 원자 단위 호출
     # ------------------------------------------------------------------
 
     async def invoke_role(
@@ -190,10 +212,14 @@ class Orchestrator:
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
         """Run a single role once and return its outcome.
+        역할 하나를 1회 실행하고 결과를 돌려준다.
 
         Dispatches between the structured fast path (decision A4) and the
         general tool-calling loop. Wraps the whole thing in a watchdog
         timeout drawn from :class:`ResiliencePolicy`.
+
+        구조화 fast path(결정 A4)와 일반 tool-calling 루프 사이를 분기한다.
+        전체 실행은 :class:`ResiliencePolicy`에서 가져온 워치독 타임아웃으로 감싼다.
         """
         try:
             role = self.roles.get(role_name)
@@ -242,6 +268,7 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
     # Internal: single step execution (incl. fan_out)
+    # 내부: 단일 스텝 실행 (fan_out 포함)
     # ------------------------------------------------------------------
 
     async def _run_step(
@@ -312,11 +339,16 @@ class Orchestrator:
         run_id: str,
     ) -> PipelineStepResult:
         """Run an :class:`ExecuteToolsStep` — LLM-less parallel tool dispatch.
+        :class:`ExecuteToolsStep` 실행 — LLM 없이 병렬 도구 디스패치.
 
         Calls are grouped by priority (ascending). Each priority group runs
         in parallel via :meth:`ToolInvocationEngine.call_parallel`; groups
         run sequentially. Results are collected in the original plan order
         regardless of execution ordering.
+
+        호출은 priority(오름차순)별로 그룹화된다. 같은 priority 그룹은
+        :meth:`ToolInvocationEngine.call_parallel`로 병렬 실행되고, 그룹 간에는
+        순차 실행된다. 결과는 실행 순서와 무관하게 원본 plan 순서로 수집된다.
         """
         if step.condition is not None and not step.condition(state):
             await self._emit(
@@ -336,11 +368,12 @@ class Orchestrator:
         )
 
         plan = step.tool_calls_from(state)
-        # Preserve plan order for the final result list.
+        # Preserve plan order for the final result list. — 최종 결과 리스트에서 plan 순서 보존.
         order_by_call_id: dict[str, int] = {req.call_id: idx for idx, (req, _) in enumerate(plan)}
         results_by_call_id: dict[str, ToolResult] = {}
 
         # Group by priority (ascending: lower priority number runs first).
+        # priority 오름차순으로 그룹화 (낮은 번호가 먼저 실행).
         priorities = sorted({prio for _, prio in plan})
         step_ok = True
         for priority in priorities:
@@ -389,6 +422,10 @@ class Orchestrator:
         # see individual failures via tool_results. For
         # continue_on_failure=False we synthesize a FAILED RoleInvocation
         # so the main abort/continue loop in run_pipeline picks it up.
+        #
+        # continue_on_failure=True 면 일부 도구가 실패해도 step 은 "completed"로 간주.
+        # responder 가 tool_results 로 개별 실패를 확인 가능. continue_on_failure=False
+        # 면 FAILED RoleInvocation 을 합성해 run_pipeline 의 abort/continue 루프가 잡도록 한다.
         outputs: list[RoleInvocationResult] = []
         if not step_ok and not step.continue_on_failure:
             outputs = [
@@ -410,6 +447,7 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
     # Internal: role invocation — fast path dispatcher + general loop
+    # 내부: 역할 호출 — fast path 디스패처 + 일반 루프
     # ------------------------------------------------------------------
 
     async def _invoke_inner(
@@ -430,10 +468,15 @@ class Orchestrator:
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
         """Fast path: ``with_structured_output`` — no tool loop.
+        Fast path: ``with_structured_output`` 사용 — 도구 루프 없음.
 
         Uses ``include_raw=True`` so we can propagate provider usage metadata
         (input/output/total tokens) into :attr:`RoleInvocationResult.metadata`
         without breaking consumers that only read ``output``.
+
+        ``include_raw=True`` 옵션으로 provider usage metadata(input/output/total
+        tokens)를 :attr:`RoleInvocationResult.metadata` 로 전파한다. ``output``만
+        읽는 기존 컨슈머의 동작은 그대로 유지된다.
         """
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -450,6 +493,7 @@ class Orchestrator:
             structured = model.with_structured_output(role.output_schema, include_raw=True)
             include_raw = True
         except TypeError:
+            # Graceful fallback when an older model provider doesn't know include_raw.
             # 오래된 model provider 가 include_raw 를 모를 때 graceful fallback.
             structured = model.with_structured_output(role.output_schema)
             include_raw = False
@@ -501,7 +545,8 @@ class Orchestrator:
         role: SubAgentRole,
         invocation: InvocationContext,
     ) -> RoleInvocationResult:
-        """General path: free-form LLM + tool-calling loop."""
+        """General path: free-form LLM + tool-calling loop.
+        일반 경로: 자유 형식 LLM + tool-calling 루프."""
         from langchain_core.messages import (
             AIMessage,
             HumanMessage,
@@ -595,7 +640,7 @@ class Orchestrator:
         )
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Helpers — 헬퍼
     # ------------------------------------------------------------------
 
     def _prepare_ctx(
@@ -605,12 +650,18 @@ class Orchestrator:
         pipeline_shared_state: dict[str, Any],
     ) -> InvocationContext:
         """Backfill ``user_request`` and merge ``pipeline.shared_state``.
+        ``user_request`` 를 채우고 ``pipeline.shared_state`` 를 병합한다.
 
         The merge is pipeline-first-then-step so that any key a step
         explicitly sets in its ``input_mapping`` wins over a pipeline
         default. This is the opposite of Python's ``{**a, **b}`` order —
         we prefer the step-level value, so the pipeline default comes
         first.
+
+        병합은 pipeline 먼저, step 이 나중. 따라서 step 이 ``input_mapping`` 에서
+        명시적으로 설정한 키가 pipeline default 보다 우선한다. Python 의
+        ``{**a, **b}`` 순서와 반대로, 우리는 step 값이 이기길 원하므로
+        pipeline default 를 먼저 풀어 넣는다.
         """
         needs_user_request = not ctx.user_request
         needs_shared_merge = bool(pipeline_shared_state)
@@ -653,16 +704,19 @@ class Orchestrator:
                 )
             )
         except Exception:  # noqa: BLE001
+            # Observer failures must never break the orchestrator loop.
+            # observer 실패가 orchestrator 루프를 깨뜨려서는 안 된다.
             pass
 
 
 # ---------------------------------------------------------------------------
-# Module helpers
+# Module helpers — 모듈 헬퍼
 # ---------------------------------------------------------------------------
 
 
 def _tool_def(adapter: ToolAdapter) -> dict[str, Any]:
-    """OpenAI-function-style tool definition for ``bind_tools``."""
+    """OpenAI-function-style tool definition for ``bind_tools``.
+    ``bind_tools`` 에 넘길 OpenAI function 스타일 도구 정의."""
     return {
         "type": "function",
         "function": {
@@ -696,15 +750,21 @@ _USAGE_FIELDS: tuple[str, ...] = ("input_tokens", "output_tokens", "total_tokens
 
 def _extract_usage(ai_msg: Any) -> dict[str, int] | None:
     """LangChain AIMessage → {input_tokens, output_tokens, total_tokens} or None.
+    LangChain AIMessage → {input_tokens, output_tokens, total_tokens} 또는 None.
 
     Standard providers (Anthropic, OpenAI, DeepSeek via openai-compat) populate
     ``AIMessage.usage_metadata`` as of langchain-core 0.2+. Gracefully returns
     ``None`` on older providers / mock messages without the field.
+
+    표준 provider(Anthropic, OpenAI, openai-compat 경유의 DeepSeek)는 langchain-core
+    0.2+ 부터 ``AIMessage.usage_metadata`` 를 채워준다. 해당 필드가 없는 구버전
+    provider 나 mock 메시지에서는 ``None`` 을 반환하며 부드럽게 폴백한다.
     """
     if ai_msg is None:
         return None
     usage = getattr(ai_msg, "usage_metadata", None)
     if usage is None:
+        # Some providers expose usage via response_metadata["usage"] or .additional_kwargs["usage"].
         # 일부 provider 는 response_metadata["usage"] 또는 .additional_kwargs["usage"] 로 내려줌.
         rm = getattr(ai_msg, "response_metadata", None)
         if isinstance(rm, dict):
@@ -715,6 +775,7 @@ def _extract_usage(ai_msg: Any) -> dict[str, int] | None:
     for key in _USAGE_FIELDS:
         v = usage.get(key)
         if v is None:
+            # Compat with OpenAI naming (prompt_tokens / completion_tokens).
             # OpenAI naming (prompt_tokens / completion_tokens) 호환.
             if key == "input_tokens":
                 v = usage.get("prompt_tokens")
@@ -737,7 +798,8 @@ def _accumulate_usage(totals: dict[str, int], delta: dict[str, int] | None) -> N
 
 
 def _usage_metadata(totals: dict[str, int]) -> dict[str, Any]:
-    """Build metadata dict only when at least one iteration reported usage."""
+    """Build metadata dict only when at least one iteration reported usage.
+    한 번이라도 usage 가 보고된 경우에만 metadata dict 를 만들어 반환."""
     if not any(totals.get(k, 0) for k in _USAGE_FIELDS):
         return {}
     return {"usage": {k: totals.get(k, 0) for k in _USAGE_FIELDS}}

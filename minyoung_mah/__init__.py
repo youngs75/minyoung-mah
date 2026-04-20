@@ -1,6 +1,8 @@
 """minyoung-mah — Multi-Agent Harness by Youngsuk × Minji (Claude).
+minyoung-mah — Youngsuk × Minji(Claude)가 함께 만든 멀티 에이전트 하니스.
 
 Top-level public API. Import from here for the common case:
+최상위 공개 API. 일반적인 사용은 이 모듈에서 직접 import 합니다:
 
     from minyoung_mah import Orchestrator, StaticPipeline, PipelineStep, \\
         RoleRegistry, ToolRegistry, SqliteMemoryStore, NullMemoryStore, \\
@@ -8,6 +10,7 @@ Top-level public API. Import from here for the common case:
         TerminalHITLChannel, default_resilience, NullObserver, StructlogObserver
 
 Or reach into submodules for less common pieces.
+잘 안 쓰는 항목은 서브모듈에서 직접 가져옵니다.
 """
 
 from .core import (
@@ -64,7 +67,7 @@ from .observer import (
 from .resilience.policy import ResiliencePolicy, default_resilience
 from .skills import Skill, SkillStore, parse_frontmatter, render_skill_block
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 __all__ = [
     "CollectingObserver",
