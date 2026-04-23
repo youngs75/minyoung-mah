@@ -497,7 +497,18 @@ class HITLResponse:
 
 @dataclass
 class HITLEvent:
-    kind: Literal["role_start", "role_end", "tool_call", "progress", "error"]
+    # ``critic_escalate`` is emitted by application-side sufficiency loops
+    # when the LLM critic verdict requests human review.
+    # ``critic_escalate`` 는 sufficiency loop 의 LLM critic verdict 가
+    # 사람 검토를 요청할 때 발화한다.
+    kind: Literal[
+        "role_start",
+        "role_end",
+        "tool_call",
+        "progress",
+        "error",
+        "critic_escalate",
+    ]
     data: dict[str, Any] = field(default_factory=dict)
 
 

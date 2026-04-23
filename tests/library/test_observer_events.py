@@ -31,6 +31,15 @@ def test_is_canonical() -> None:
     assert not is_canonical("orchestrator.tool.call.start")
 
 
+def test_critic_verdict_is_canonical() -> None:
+    # Application-side sufficiency loops emit this from a wrapper around
+    # ``invoke_role("critic", ...)``. Adapter authors (Langfuse, OTel)
+    # must recognise it as a first-class span.
+    # application-side sufficiency loop 가 ``invoke_role("critic", ...)`` 래퍼에서
+    # 발화. 어댑터 작성자(Langfuse, OTel)가 1급 span 으로 인식해야 함.
+    assert is_canonical("orchestrator.critic.verdict")
+
+
 @pytest.mark.asyncio
 async def test_collecting_observer_records_events() -> None:
     obs = CollectingObserver()

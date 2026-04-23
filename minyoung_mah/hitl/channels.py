@@ -125,10 +125,20 @@ class QueueHITLChannel:
         self._pending: asyncio.Queue[tuple[str, asyncio.Future[HITLResponse]]] = (
             asyncio.Queue()
         )
+        # Notifications are one-way (no reply expected). The application
+        # consumes this queue in parallel to ``pending`` and forwards each
+        # event to the user surface (SSE stream, webhook, log, etc.).
+        # 알림은 단방향(응답 없음). 애플리케이션이 ``pending`` 과 병렬로 이 큐를
+        # 소비해 사용자 surface(SSE 스트림, webhook, 로그 등)로 전달한다.
+        self._notifications: asyncio.Queue[HITLEvent] = asyncio.Queue()
 
     @property
     def pending(self) -> asyncio.Queue[tuple[str, asyncio.Future[HITLResponse]]]:
         return self._pending
+
+    @property
+    def notifications(self) -> asyncio.Queue[HITLEvent]:
+        return self._notifications
 
     async def ask(
         self,
@@ -150,5 +160,5 @@ class QueueHITLChannel:
         if not future.done():
             future.set_result(response)
 
-    async def notify(self, event: HITLEvent) -> None:  # noqa: ARG002
-        return None
+    async def notify(self, event: HITLEvent) -> None:
+        await self._notifications.put(event)

@@ -62,6 +62,17 @@ EVENT_NAMES: frozenset[str] = frozenset(
         "orchestrator.memory.read",
         "orchestrator.memory.write",
         "orchestrator.resilience.escalate",
+        # Critic verdict — emitted by application-side sufficiency loops that
+        # call ``invoke_role("critic", ...)`` to evaluate whether a previous
+        # pipeline run satisfied the user request. Carrying ``verdict`` and
+        # ``reason`` in ``metadata`` lets Langfuse render it as a distinct
+        # span next to ``orchestrator.role.invoke.*``.
+        #
+        # Critic verdict — `invoke_role("critic", ...)` 로 직전 파이프라인 결과의
+        # 사용자 요구 충족 여부를 평가하는 application-side sufficiency loop 가
+        # 발화하는 이벤트. ``metadata`` 에 ``verdict`` 와 ``reason`` 을 실으면
+        # Langfuse 가 ``orchestrator.role.invoke.*`` 옆에 별도 span 으로 렌더링.
+        "orchestrator.critic.verdict",
     }
 )
 
