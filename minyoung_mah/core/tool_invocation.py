@@ -28,6 +28,7 @@ like use) and dynamic (``delegate`` tool loop) flows share it.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ from typing import Iterable
 
 from pydantic import BaseModel, ValidationError
 
+from ..resilience.progress_watchdog import signal_current_progress
 from .protocols import Observer, ToolAdapter
 from .types import (
     ErrorCategory,
@@ -43,6 +45,26 @@ from .types import (
     ToolResult,
     TRANSIENT_ERRORS,
 )
+
+
+def _compute_args_hash(tool_name: str, args: dict | BaseModel) -> int:
+    """Deterministic hash of ``(tool_name, args)`` for progress dedup.
+
+    Uses ``json.dumps(sort_keys=True)`` so nested dicts hash consistently
+    across invocations. Falls back to ``repr`` if JSON serialization fails
+    (e.g. the adapter's arg model embeds a non-JSON type).
+    """
+    if isinstance(args, BaseModel):
+        try:
+            payload = args.model_dump_json()
+        except Exception:  # noqa: BLE001
+            payload = repr(args)
+    else:
+        try:
+            payload = json.dumps(args, sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001
+            payload = repr(args)
+    return hash((tool_name, payload))
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +220,15 @@ class ToolInvocationEngine:
             )
 
             if result.ok:
+                # Progress signal — novel (tool_name, args) success extends
+                # the enclosing role invocation's watchdog deadline.
+                try:
+                    signal_current_progress(
+                        _compute_args_hash(adapter.name, args_model)
+                    )
+                except Exception:  # noqa: BLE001
+                    # Watchdog failures must never break a successful tool.
+                    pass
                 return result
 
             last_error = result

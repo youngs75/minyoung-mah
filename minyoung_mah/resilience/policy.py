@@ -73,6 +73,17 @@ class ResiliencePolicy:
         default_factory=lambda: ProgressGuard.disabled()
     )
 
+    # Progress-based watchdog knobs (F4, 2026-04-23).
+    # Each novel tool call success extends the role invocation's deadline by
+    # ``watchdog_extend_s``, up to ``watchdog_max_total_s`` from start. Setting
+    # ``watchdog_extend_s=0`` reverts to pure wall-clock behavior (no extension).
+    # 진전 기반 워치독 노브 (F4, 2026-04-23).
+    # 고유한 도구 호출 성공마다 역할 호출의 마감 시각이 ``watchdog_extend_s``
+    # 만큼 연장되며, 상한은 시작 시점 기준 ``watchdog_max_total_s``.
+    # ``watchdog_extend_s=0`` 으로 두면 순수 wall-clock 동작 (연장 없음).
+    watchdog_extend_s: float = 60.0
+    watchdog_max_total_s: float = 900.0
+
     def timeout_for(self, role_name: str) -> float:
         return self.role_timeouts.get(role_name, self.fallback_timeout_s)
 

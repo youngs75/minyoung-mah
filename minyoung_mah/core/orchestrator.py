@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from ..hitl.channels import NullHITLChannel
 from ..observer.events import NullObserver
 from ..resilience.policy import ResiliencePolicy, default_resilience
+from ..resilience.progress_watchdog import ProgressWatchdog, install as install_watchdog
 from .protocols import (
     HITLChannel,
     MemoryExtractor,
@@ -227,6 +228,13 @@ class Orchestrator:
             raise OrchestratorError(str(exc)) from exc
 
         timeout_s = self.resilience.timeout_for(role_name)
+        watchdog = ProgressWatchdog(
+            base_timeout_s=timeout_s,
+            extend_s=self.resilience.watchdog_extend_s,
+            max_total_s=max(self.resilience.watchdog_max_total_s, timeout_s),
+        )
+        watchdog.start()
+
         start = time.monotonic()
         await self._emit(
             "orchestrator.role.invoke.start",
@@ -234,26 +242,43 @@ class Orchestrator:
             metadata={"task_summary": invocation.task_summary},
         )
 
+        timed_out = False
         try:
-            result = await asyncio.wait_for(
-                self._invoke_inner(role, invocation),
-                timeout=timeout_s,
-            )
+            with install_watchdog(watchdog):
+                result = await self._run_with_progress_watchdog(
+                    self._invoke_inner(role, invocation),
+                    watchdog,
+                )
         except asyncio.TimeoutError:
+            timed_out = True
+
+        if timed_out:
             duration = int((time.monotonic() - start) * 1000)
             await self._emit(
                 "orchestrator.role.invoke.end",
                 role=role_name,
                 ok=False,
                 duration_ms=duration,
-                metadata={"error": "watchdog_timeout", "timeout_s": timeout_s},
+                metadata={
+                    "error": "watchdog_timeout",
+                    "timeout_s": timeout_s,
+                    "watchdog_extend_s": self.resilience.watchdog_extend_s,
+                    "watchdog_signals": watchdog.signal_count,
+                    "watchdog_elapsed_s": round(watchdog.elapsed_s, 2),
+                },
             )
             return RoleInvocationResult(
                 role_name=role_name,
                 status=RoleStatus.ABORTED,
                 output=None,
                 duration_ms=duration,
-                error=f"role '{role_name}' exceeded watchdog timeout of {timeout_s}s",
+                error=(
+                    f"role '{role_name}' exceeded progress watchdog "
+                    f"(elapsed={round(watchdog.elapsed_s, 1)}s, "
+                    f"{watchdog.signal_count} progress signals, "
+                    f"base={timeout_s}s extend={self.resilience.watchdog_extend_s}s "
+                    f"cap={self.resilience.watchdog_max_total_s}s)"
+                ),
             )
 
         result.duration_ms = int((time.monotonic() - start) * 1000)
@@ -265,6 +290,67 @@ class Orchestrator:
             metadata={"iterations": result.iterations, "status": result.status.name},
         )
         return result
+
+    # ------------------------------------------------------------------
+    # Internal: progress-based watchdog scheduler
+    # 내부: 진전 기반 워치독 스케줄러
+    # ------------------------------------------------------------------
+
+    _WATCHDOG_POLL_S: float = 2.0
+
+    async def _run_with_progress_watchdog(
+        self,
+        coro: Awaitable[RoleInvocationResult],
+        watchdog: ProgressWatchdog,
+    ) -> RoleInvocationResult:
+        """Run ``coro`` under a progress-based deadline.
+
+        Unlike ``asyncio.wait_for``, this scheduler polls the watchdog every
+        ``_WATCHDOG_POLL_S`` seconds so that extensions triggered by tool-call
+        progress (via :func:`signal_current_progress`) are observed before
+        cancelling. On deadline expiry, the task is cancelled and
+        :class:`asyncio.TimeoutError` is raised to match the old interface.
+
+        진전 기반 마감 시각 하에서 ``coro`` 를 실행한다.
+        ``asyncio.wait_for`` 와 달리 이 스케줄러는 ``_WATCHDOG_POLL_S`` 마다
+        워치독을 폴링하여 도구 호출 진전(:func:`signal_current_progress`
+        경유)으로 트리거된 연장을 취소 전에 관찰한다. 마감 시각 만료 시
+        태스크가 취소되며 기존 인터페이스와 일치하도록
+        :class:`asyncio.TimeoutError` 가 raise 된다.
+        """
+        task = asyncio.create_task(coro)  # type: ignore[arg-type]
+        try:
+            while True:
+                if task.done():
+                    return task.result()
+                remaining = watchdog.remaining_s()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                poll = min(remaining, self._WATCHDOG_POLL_S)
+                done, _pending = await asyncio.wait({task}, timeout=poll)
+                if task in done:
+                    return task.result()
+        except asyncio.TimeoutError:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, BaseException):  # noqa: BLE001
+                    # Cancellation may surface as CancelledError or the
+                    # awaited exception — we don't care which, we've already
+                    # decided to time out.
+                    pass
+            raise
+        except BaseException:
+            # Propagate non-timeout failures (including cancellation from
+            # outside this scheduler) after ensuring the inner task is done.
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except BaseException:  # noqa: BLE001
+                    pass
+            raise
 
     # ------------------------------------------------------------------
     # Internal: single step execution (incl. fan_out)
