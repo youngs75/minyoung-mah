@@ -56,6 +56,13 @@ from .hitl import (
     extract_interrupt_payload,
     make_interrupt_marker,
 )
+from .context import (
+    CompactPolicy,
+    CompactResult,
+    ContextManager,
+    default_policy,
+    get_context_window,
+)
 from .memory.store import NullMemoryStore, SqliteMemoryStore
 from .model import SingleModelRouter, TieredModelRouter
 from .observer import (
@@ -67,11 +74,14 @@ from .observer import (
 from .resilience.policy import ResiliencePolicy, default_resilience
 from .skills import Skill, SkillStore, parse_frontmatter, render_skill_block
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"
 
 __all__ = [
     "CollectingObserver",
+    "CompactPolicy",
+    "CompactResult",
     "CompositeObserver",
+    "ContextManager",
     "DEFAULT_TOOL_RETRY",
     "DuplicateRegistrationError",
     "ErrorCategory",
@@ -119,8 +129,10 @@ __all__ = [
     "UnknownRoleError",
     "UnknownToolError",
     "__version__",
+    "default_policy",
     "default_resilience",
     "extract_interrupt_payload",
+    "get_context_window",
     "make_interrupt_marker",
     "parse_frontmatter",
     "render_skill_block",

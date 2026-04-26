@@ -73,6 +73,17 @@ EVENT_NAMES: frozenset[str] = frozenset(
         # 발화하는 이벤트. ``metadata`` 에 ``verdict`` 와 ``reason`` 을 실으면
         # Langfuse 가 ``orchestrator.role.invoke.*`` 옆에 별도 span 으로 렌더링.
         "orchestrator.critic.verdict",
+        # Context compaction — token-aware threshold 도달 시 별도 LLM
+        # summarize 가 messages 를 boundary marker + summary 로 교체.
+        # ``warning`` 은 사용자 인지용, ``start``/``end`` 는 compact 본
+        # 작업 추적용 (Langfuse 가 별도 span 으로 렌더링).
+        #
+        # Context compaction — token threshold 도달 시 별도 LLM 이 메시지를
+        # boundary marker + summary 로 압축. ``warning`` 은 사용자 알림,
+        # ``start``/``end`` 는 compact 작업 자체 추적 (Langfuse span).
+        "orchestrator.context.compact.warning",
+        "orchestrator.context.compact.start",
+        "orchestrator.context.compact.end",
     }
 )
 
